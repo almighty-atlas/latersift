@@ -9,7 +9,7 @@ Stand: 17.10.2026 · **0.2.0**. M1 ist **nutzerbestätigt abgeschlossen**; M3 is
 | M1 live                     | **Nutzerbestätigt:** 4.926/4.926, `complete`, vollständiges JSON lokal gespeichert. YouTubes „Nicht verfügbare Videos anzeigen“ machte die fehlenden 240 sichtbar.                        |
 | Eigener Agenten-Live-Test   | Kein eigener automatisierter angemeldeter Live-Nachweis; die M1-Aussage stammt ausdrücklich vom Nutzer.                                                                                   |
 | M3 live                     | **Noch kein bestätigter Schreibpilot.** Es wurden keine eigenen Live-Schreibaktionen ausgeführt.                                                                                          |
-| Aktuelle 0.2.0-Verifikation | Vollständige lokale Prüffolge erfolgreich: **466/466 Vitest, 48/48 UI**; Details unten. CI-Nachweis folgt nach Veröffentlichung.                                                          |
+| Aktuelle 0.2.0-Verifikation | Vollständige lokale Prüffolge erfolgreich: **466/466 Vitest, 48/48 UI**; Push- und PR-CI für `b35391d` ebenfalls erfolgreich, Links unten.                                                |
 | Fixtures / Smoke-Test       | Synthetische DOM-/UI-/Executor-Tests bzw. Add-on-Installation sind keine Live-M3-Abnahme.                                                                                                 |
 | Distribution                | `artifacts/latersift-0.2.0-unsigned.xpi` erstellt; echtes MV3-Add-on aus `dist` und finaler XPI erfolgreich in Firefox 157 installiert. Weiterhin unsigniert, keine AMO-Veröffentlichung. |
 
@@ -60,7 +60,7 @@ Vollständige lokale Prüffolge für 0.2.0 am 17.10.2026:
 - Firefox **157**: echtes MV3-Add-on sowohl aus `dist` als auch aus der **finalen XPI** erfolgreich installiert; Installations-, kein Live-YouTube-Nachweis.
 - `pnpm package`: `artifacts/latersift-0.2.0-unsigned.xpi` erstellt.
 
-Die vorhandene geprüfte CI enthält bereits die Prüfbefehle und Artefaktbereitstellung; keine Workflow-Änderung nötig. Der Lauf für den Feature-Branch/PR wird nach dem Push geprüft und hier verlinkt. Reproduktion und manuelle Kriterien: [TESTING.md](TESTING.md).
+Die vorhandene geprüfte CI enthält bereits die Prüfbefehle und Artefaktbereitstellung; keine Workflow-Änderung nötig. Für Implementierungscommit `b35391d` waren sowohl die [Push-CI](https://github.com/almighty-atlas/latersift/actions/runs/39068907126) als auch die [PR-CI](https://github.com/almighty-atlas/latersift/actions/runs/39068910728) erfolgreich. [PR #2](https://github.com/almighty-atlas/latersift/pull/2) bleibt für Review und die ausdrücklich freigegebene manuelle Pilot-Abnahme offen; Folgeänderungen werden erneut geprüft. Testpaket: `artifacts/latersift-0.2.0-unsigned.xpi` sowie CI-Artefakt `latersift-unsigned`. Reproduktion und manuelle Kriterien: [TESTING.md](TESTING.md).
 
 Der nächste Live-Schritt ist **genau ein bewusst ausgewähltes entbehrliches Video**, vorzugsweise **gewöhnliches Entfernen zuerst**, mit lokalem vollständigem Backup und unverändert geöffnetem Original-WL-Tab. Ergebnis zusätzlich direkt in YouTube prüfen. Bei nicht unterstütztem DOM oder `unknown` stoppen: keine Gates lockern, Klicks erzwingen, Limits erhöhen oder Speicherzustände umschreiben. Technischen Fehler mit minimalem bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. [Detaillierter erster Pilot](TESTING.md#erster-m3-live-pilot-genau-eine-entscheidung).
 
