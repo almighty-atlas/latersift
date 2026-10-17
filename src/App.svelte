@@ -19,7 +19,6 @@
     stageCleanup,
     startSession,
     undo,
-    WRITE_GATE,
     type Filter,
   } from './session';
   import {
@@ -34,7 +33,10 @@
     openWatchLater,
     youtubeTabs,
   } from './bridge';
-  import { availabilityLabels, decisionLabels, operationLabels } from './i18n';
+  import { availabilityLabels, decisionLabels } from './i18n';
+  import OperationsPanel from './OperationsPanel.svelte';
+  import { discoverPlaylists } from './write-bridge';
+  import type { PlaylistChoice } from './operations';
   import { watchLaterLocation } from './adapter/dom';
   import './style.css';
 
@@ -53,6 +55,9 @@
   let size = $state(25),
     filter = $state<Filter>('all'),
     archiveInput = $state('');
+  let playlistChoices = $state<PlaylistChoice[]>([]);
+  let playlistChoice = $state('');
+  let operationsBusy = $state(false);
   let cleanupSelected = $state<string[]>([]),
     cleanupConfirm = $state(false);
   let startPoint: { x: number; y: number } | null = null;
@@ -67,7 +72,11 @@
   const card = $derived(currentVideo(lib));
   const decisions = $derived(sessionDecisions(lib));
   const pending = $derived(
-    lib.decisions.filter((d) => d.kind !== 'defer' && d.status === 'pending'),
+    lib.decisions.filter(
+      (d) =>
+        d.kind !== 'defer' &&
+        ['pending', 'failed', 'unknown'].includes(d.status),
+    ),
   );
   const scan = $derived(latestScan(lib));
   const resumable = $derived(scan?.status !== 'complete' ? scan : undefined);
@@ -135,7 +144,9 @@
     );
   });
   const cleanup = $derived(videos.filter(safeCandidate));
-  const disabled = $derived(!ready || !owner || busy || importing);
+  const disabled = $derived(
+    !ready || !owner || busy || importing || operationsBusy,
+  );
   const hasDuration = $derived(videos.some((v) => v.durationSeconds !== null));
   const hasPosition = $derived(videos.some((v) => v.position !== null));
 
@@ -336,6 +347,29 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     feedback = 'JSON-Export erstellt · keine automatische Wiederherstellung';
   }
+  async function commitOperations(copy: Library) {
+    await saveLibrary(copy);
+    lib = copy;
+  }
+  async function loadPlaylists() {
+    if (disabled || !videos[0]) return;
+    busy = true;
+    error = '';
+    playlistChoices = [];
+    playlistChoice = '';
+    try {
+      playlistChoices = (await discoverPlaylists(videos[0].id)).filter(
+        (p: PlaylistChoice) => p.writable,
+      );
+      if (!playlistChoices.length)
+        error =
+          'Keine schreibbaren Playlists gefunden. Die YouTube-Ansicht wird möglicherweise nicht unterstützt; manuelle URL bleibt möglich.';
+    } catch (e) {
+      error = `Playlists konnten nicht aus YouTube geladen werden: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      busy = false;
+    }
+  }
   async function saveArchive() {
     const id = playlistId(archiveInput);
     if (!id) {
@@ -361,6 +395,11 @@
     }
   }
   function keydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && panel) {
+      e.preventDefault();
+      closePanel();
+      return;
+    }
     if (
       (e.target instanceof Element &&
         e.target.closest('input,select,textarea,button,a,[contenteditable]')) ||
@@ -406,17 +445,15 @@
       void act(dx < 0 ? 'remove' : 'archive');
     else if (dy > 85 && dy > Math.abs(dx) * 1.3) void act('defer');
   }
+  function closePanel() {
+    if (!operationsBusy && !busy) panel = null;
+  }
   function focusTrap(node: HTMLElement) {
     const prior = document.activeElement;
     const selector =
       'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea,summary,[tabindex="0"]';
     queueMicrotask(() => node.querySelector<HTMLElement>(selector)?.focus());
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        panel = null;
-        return;
-      }
       if (e.key !== 'Tab') return;
       const focusable = [...node.querySelectorAll<HTMLElement>(selector)];
       const first = focusable[0],
@@ -454,12 +491,13 @@
       <button
         class="quiet"
         onclick={showImport}
-        disabled={!ready || !owner || busy}>↓ Import</button
+        disabled={!ready || !owner || busy || operationsBusy}>↓ Import</button
       >
       <button
         class="quiet"
         onclick={exportJSON}
-        disabled={!ready || importing || !scan}>↗ Backup</button
+        disabled={!ready || importing || operationsBusy || !scan}
+        >↗ Backup</button
       >
       <button
         class="queue-count"
@@ -470,9 +508,9 @@
   </header>
 
   <div class="safety-note">
-    <span class="dot"></span> Read-only-Vorabversion
-    <span class="separator">·</span> Entscheidungen bleiben lokal. YouTube wird nicht
-    verändert.
+    <span class="dot"></span> Lokal vormerken
+    <span class="separator">·</span> YouTube-Änderungen nur im Schreibpilot nach genauer
+    Auswahl und ausdrücklicher Freigabe.
   </div>
   {#if error}<div role="alert" class="error">{error}</div>{/if}
   <main>
@@ -611,7 +649,7 @@
                 {lib.session?.paused
                   ? 'Dein Fortschritt ist lokal gespeichert.'
                   : lib.session
-                    ? `${decisions.length} Entscheidungen gespeichert. Noch keine Änderungen an YouTube.`
+                    ? `${decisions.length} Entscheidungen lokal gespeichert. YouTube-Ergebnisse stehen in den Vormerkungen.`
                     : 'Standardmäßig 25 Videos. Du bestimmst das Tempo.'}
               </p>
               {#if lib.session && !lib.session.paused}
@@ -629,6 +667,12 @@
                     >{decisions.filter((d) => d.kind === 'defer').length} Zurückstellen</span
                   >
                 </div>
+              {/if}
+              {#if lib.session && !lib.session.paused && pending.some((d) => d.sessionId === lib.session?.id)}
+                <button onclick={() => (panel = 'queue')} {disabled}
+                  >{pending.filter((d) => d.sessionId === lib.session?.id)
+                    .length} Änderungen auf YouTube anwenden</button
+                >
               {/if}
               {#if lib.session?.paused}<button
                   class="primary"
@@ -712,7 +756,8 @@
           <button
             class="close"
             aria-label="Dialog schließen"
-            onclick={() => (panel = null)}>×</button
+            disabled={operationsBusy || busy}
+            onclick={closePanel}>×</button
           >
         </div>
         {#if panel === 'import'}
@@ -878,6 +923,34 @@
             nur lokal gespeichert; seine Existenz, Schreibbarkeit und
             Video-Zugehörigkeiten sind noch nicht geprüft.
           </p>
+          <button onclick={loadPlaylists} disabled={disabled || !videos.length}
+            >Playlists aus YouTube laden</button
+          >
+          <p class="hint">
+            Öffnet ausdrücklich einen YouTube-Arbeitstab zur Abfrage. Keine
+            Playlist wird dabei verändert.
+          </p>
+          {#if playlistChoices.length}
+            <label for="archive-choice">Schreibbare YouTube-Playlist</label>
+            <select
+              id="archive-choice"
+              bind:value={playlistChoice}
+              onchange={() => {
+                if (
+                  playlistChoices.some(
+                    (p) => p.id === playlistChoice && p.writable,
+                  )
+                )
+                  archiveInput = playlistChoice;
+              }}
+              {disabled}
+            >
+              <option value="">Bitte wählen</option>
+              {#each playlistChoices as choice (choice.id)}<option
+                  value={choice.id}>{choice.title} ({choice.id})</option
+                >{/each}
+            </select>
+          {/if}
           <label for="archive-url">YouTube-Playlist-URL oder PL…-ID</label
           ><input
             id="archive-url"
@@ -894,39 +967,16 @@
           >
         {:else if panel === 'queue'}
           <h2 id="panel-title">{pending.length} Änderungen vorgemerkt.</h2>
-          <p>{WRITE_GATE}</p>
-          <div class="write-gate">
-            <strong>0 YouTube-Änderungen ausgeführt</strong><span
-              >Kein „Anwenden“-Schalter in dieser Vorabversion.</span
-            >
-          </div>
-          <div class="queue-list">
-            {#each lib.decisions
-              .filter((d) => d.kind !== 'defer')
-              .toReversed() as d (d.id)}<div class="queue-row">
-                <div>
-                  <strong>{decisionLabels[d.kind]}</strong><span
-                    >{videos.find((v) => v.id === d.videoId)?.title ||
-                      d.videoId}</span
-                  ><small
-                    >{operationLabels[d.status]} · {d.id}{d.targetPlaylist
-                      ? ` · Ziel ${d.targetPlaylist}`
-                      : ''}</small
-                  >
-                </div>
-                <button
-                  aria-label={`Vormerkung für ${d.videoId} zurücknehmen`}
-                  onclick={() =>
-                    change((copy) => {
-                      copy.decisions = copy.decisions.filter(
-                        (item) => item.id !== d.id,
-                      );
-                    })}
-                  disabled={disabled || d.status !== 'pending'}>↶</button
-                >
-              </div>{/each}
-          </div>
-          <button onclick={exportJSON} disabled={importing || !scan}
+          <OperationsPanel
+            library={lib}
+            {disabled}
+            oncommit={commitOperations}
+            onbusy={(value) => (operationsBusy = value)}
+          />
+          <button
+            id="operations-backup"
+            onclick={exportJSON}
+            disabled={importing || operationsBusy || !scan}
             >Bestand und Vormerkungen exportieren</button
           >
         {:else if panel === 'cleanup'}

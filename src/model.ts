@@ -1,3 +1,5 @@
+import type { DecisionJournal, OperationState } from './operations';
+
 export type Availability =
   'available' | 'private' | 'removed' | 'restricted' | 'unknown';
 export interface Video {
@@ -67,6 +69,8 @@ export interface Decision {
   targetPlaylist: string | null;
   createdAt: string;
   status: OperationStatus;
+  journal?: DecisionJournal;
+  source?: 'swipe' | 'cleanup';
 }
 export interface Session {
   id: string;
@@ -76,14 +80,16 @@ export interface Session {
   createdAt: string;
 }
 export interface Library {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
+  operations?: OperationState;
   scans: Scan[];
   decisions: Decision[];
   session: Session | null;
   archivePlaylist: string;
 }
 export const emptyLibrary = (): Library => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
+  operations: { limit: 1, attestations: [] },
   scans: [],
   decisions: [],
   session: null,

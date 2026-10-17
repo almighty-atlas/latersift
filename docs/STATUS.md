@@ -1,72 +1,67 @@
 # Lieferstatus / Evidenz
 
-Stand: 17.10.2026. **M1.1 / 0.1.1: Read-only-Korrekturstand lokal erfolgreich geprüft; vollständiges MVP nicht abgeschlossen.**
+Stand: 17.10.2026 · **0.2.0**. M1 ist **nutzerbestätigt abgeschlossen**; M3 ist implementiert, aber **experimentell, vorläufig und noch nicht live abgenommen**. Keine Behauptung eines robust fertigen schreibenden MVP oder tatsächlicher allgemeiner YouTube-Kompatibilität.
 
-| Meilenstein | Implementierter Umfang                                                                                                                        | Noch offen                                                                                                                                   |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| M1          | DOM-Import, Lazy Loading/Virtualisierung, bestätigte Checkpoints, Vollständigkeitsprüfung, Backup                                             | Erfolgreichen vollständigen angemeldeten Scan und Export live bestätigen                                                                     |
-| M1.1        | Fortschritts-/Aufmerksamkeitszustände, begrenzte Recovery, Scrollcontainer-Erkennung, reduzierte Checkpoint-Frequenz, Fortsetzen und Diagnose | Erneute Zen/CachyOS-Live-Prüfung mit 4.926 Einträgen                                                                                         |
-| M2          | Swipe-Karten, lokale Entscheidungen, UUIDs, Undo, Runden, Pause/Resume, Tastatur/Pointer                                                      | Echte Touch-Hardware manuell prüfen; Archivierung ist keine lokale M2-Funktion                                                               |
-| M3          | Schreibsperre und Fähigkeitenmodell; Archivziel lokal hinterlegen                                                                             | Playlist-Auswahl, Mitgliedschaft, Hinzufügen, Entfernen, Verifikation, genehmigter Executor, Retry/Backoff und sichere Wiederaufnahme fehlen |
-| M4          | Konservative Verfügbarkeit, bestätigte lokale Bereinigung, Filter, Dokumentation, Testinfrastruktur                                           | Echte Bereinigungsmutationen benötigen M3; Signierung/AMO fehlen                                                                             |
+## Evidenz klar trennen
 
-## Nutzer-Live-Befund: 0.1.0, Zen auf CachyOS
+| Bereich                     | Beleg / Einordnung                                                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1 live                     | **Nutzerbestätigt:** 4.926/4.926, `complete`, vollständiges JSON lokal gespeichert. YouTubes „Nicht verfügbare Videos anzeigen“ machte die fehlenden 240 sichtbar.                        |
+| Eigener Agenten-Live-Test   | Kein eigener automatisierter angemeldeter Live-Nachweis; die M1-Aussage stammt ausdrücklich vom Nutzer.                                                                                   |
+| M3 live                     | **Noch kein bestätigter Schreibpilot.** Es wurden keine eigenen Live-Schreibaktionen ausgeführt.                                                                                          |
+| Aktuelle 0.2.0-Verifikation | Vollständige lokale Prüffolge erfolgreich: **466/466 Vitest, 48/48 UI**; Details unten. CI-Nachweis folgt nach Veröffentlichung.                                                          |
+| Fixtures / Smoke-Test       | Synthetische DOM-/UI-/Executor-Tests bzw. Add-on-Installation sind keine Live-M3-Abnahme.                                                                                                 |
+| Distribution                | `artifacts/latersift-0.2.0-unsigned.xpi` erstellt; echtes MV3-Add-on aus `dist` und finaler XPI erfolgreich in Firefox 157 installiert. Weiterhin unsigniert, keine AMO-Veröffentlichung. |
 
-Der Nutzer hat einen echten angemeldeten Import versucht und folgenden Teilimport gemeldet:
+Der frühere Teilimport in Zen/CachyOS hatte 4.686 statt 4.926 IDs, höchste Position 4.686, unidentifizierbare Zeilen 0 und `incomplete`. Dieser Befund ist durch den späteren nutzerbestätigten vollständigen Scan **als aktueller M1-Abnahmestand überholt**. Die Null bezeichnete nicht die Verfügbarkeit aller Videos. Fortschritt nach Tabaktivierung war eine Beobachtung, kein isolierter Throttling-Nachweis; die 240 später eingeblendeten Einträge dürfen nicht nachträglich als bewiesener Throttlingfehler dargestellt werden.
 
-| Messwert                                        | Befund       |
-| ----------------------------------------------- | ------------ |
-| Erwartete YouTube-Gesamtzahl                    | 4.926        |
-| Importierte eindeutige IDs                      | 4.686        |
-| Höchste beobachtete Position                    | 4.686        |
-| Unidentifizierbare Zeilen (`unknown` im Befund) | 0            |
-| Endstatus                                       | `incomplete` |
+## Implementierter Stand
 
-Es fehlen damit 240 Einträge gegenüber der erwarteten Zahl. Die Null bezieht sich auf nicht identifizierbare Zeilen, **nicht** auf die Verfügbarkeit aller Videos. Bei etwa 1.000 Einträgen wurde nach Aktivierung des YouTube-Tabs wieder Fortschritt beobachtet. Das ist ein Zusammenhang, kein isolierter Nachweis von Browser-/Tab-Throttling.
+| Meilenstein  | Vorhanden                                                                                                                                                                 | Grenze / offene Abnahme                                                                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1 / M1.1    | DOM-Import, Lazy Loading/Virtualisierung, Vollständigkeitsprüfung, bestätigte Checkpoints, Recovery, Pause/Resume, Diagnose und JSON-Export                               | Vollständiger Live-Scan/Export nutzerbestätigt; keine Garantie für jede DOM-Variante oder einen atomaren Serverbestand                                              |
+| M2           | Karten, lokale Entscheidungen, UUIDs, Undo, Runden, Pause/Resume, Tastatur/Pointer, Zusammenfassung                                                                       | Echte Touch-Hardware separat prüfen; Vormerken ist noch keine YouTube-Mutation                                                                                      |
+| M3           | Nativer Save-DOM-Adapter, Playlist-Abfrage, Mitgliedschaft, Add/Remove, frische Prüfung, Freigaben, persistentes Journal, sequenzieller Executor, Stoppen und Pilotstufen | Experimentelle fail-closed Grundlage; alle Mutationen können im aktuellen Live-DOM unsupported sein. Erster 1er-Live-Pilot offen; manuelle Wiederfreigabe vorhanden |
+| M4 / Betrieb | Konservative Verfügbarkeit, bestätigte lokale Bereinigung, Filter und Testinfrastruktur                                                                                   | Bereinigungs-Writes unterliegen M3-Gates; kein Backup-Import/Restore, keine Signierung/AMO-Abnahme                                                                  |
 
-Dies ersetzt die frühere Aussage „keine echte Playlist gelesen“: Es gibt Nutzer-Live-Evidenz für einen fehlgeschlagenen Vollständigkeitsnachweis. Es gibt **keine erfolgreiche M1-Abnahme** und **keine Live-Abnahme von 0.1.1**. Der Agent hat keine eigene angemeldete YouTube-Sitzung geprüft. Es wurden keine YouTube-Schreiboperationen implementiert oder als erfolgreich ausgegeben.
+### M3: unterstützter Vertrag, nicht universeller YouTube-Adapter
 
-## Ursachenanalyse und M1.1
+- Nativer Save-/Speichern-Dialog mit semantischen Controls und isolierten unterstützten Renderern. Die Watch-URL allein genügt nicht: genau ein sichtbarer `ytd-watch-flexy` muss die angeforderte `video-id` tragen, der Save-Button muss darin liegen. Keine internen Properties oder APIs.
+- **Auch WL verlangt einen expliziten Link `/playlist?list=WL` innerhalb derselben Checkbox-Option**, Archiv entsprechend `list=PL…`. Niemals Label allein: eine eigene Playlist namens „Watch later“ darf keinen WL-False-Match auslösen. Ohne WL-Link kein Remove; fehlende Identität ist `unknown`, nicht `absent`.
+- Viele aktuelle YouTube-Varianten exponieren diese Links nicht: **Alle Mutationen können unsupported sein**, nicht nur Archivieren. Ehrliche fail-closed Grundlage, aktuelle Live-Kompatibilität unbekannt. Manuelle URL/ID und Titelzuordnung sind kein Bypass. `getAvailablePlaylists` scheitert bei **jeder** nicht identifizierbaren Zeile.
+- `getPlaylistMembership` öffnet einen frischen Dialog; die Bridge erzwingt vor **jeder** Mitgliedschaftsbeobachtung zusätzlich `reload(..., { bypassCache: true })`, **auch nach Videowechsel**. Navigation allein oder optimistisches Checkbox-Feedback reicht nicht; diese DOM-Evidenz ersetzt keinen Live-Test.
+- Discovery- und Ausführungsbutton öffnen ausdrücklich einen eigenen aktiven YouTube-Arbeitstab. Aktiv/fokussiert halten; keine wiederholte automatische Aktivierung. Original-WL-Tab und Arbeitstab bleiben zur unabhängigen Prüfung erhalten.
 
-- Die alte Regel „acht ruhige Durchläufe und keine Continuation“ konnte einen Teilimport vorzeitig beenden. Ein fehlender Ladeindikator ist kein Nachweis eines fertigen Bestands.
-- Scrollen des falschen Kindes bzw. Fensters konnte den tatsächlichen Playlist-Scrollcontainer und damit das Nachladen verfehlen. M1.1 ermittelt den scrollbaren Vorfahren und bewegt ihn um 85 % seines Viewports, mindestens 400 px. Recovery geht am Ende einen Schritt zurück, danach regulär wieder vorwärts.
-- Vollständige Checkpoints pro Sekundenrunde mit serieller Speicherung vor ACK waren ein wachsender Flaschenhals. M1.1 behält sichere vollständige Checkpoints, reduziert aber deren Frequenz nach Fortschritt/Zeit und speichert Zustandswechsel/Ende.
-- `waiting` und `needs_attention` unterscheiden sichtbaren Stillstand und stockenden Hintergrundtab. Nutzeraktivierung erfolgt ausschließlich per Klick; zuverlässiger Hintergrundscan wird nicht versprochen. Genaue Budgets: [Architektur](../ARCHITECTURE.md#m11-zustände-und-defaults).
-- Fortsetzen nutzt separat gespeicherte Evidenz (`confirmedVideoIds`), keinen Servercursor. Gleiche Dokumentgeneration: nur diese Belege und die Scrollposition bleiben erhalten. Reload/neue Generation: IDs bleiben aufbewahrt, Scrollposition wird auf 0 gesetzt und Positionsbelege werden frisch erhoben. `yt-navigate-start`, `popstate` und `pagehide` invalidieren die Generation; der Scanner unterbricht bei Generationwechsel.
-- Anfahrt durch vorhandene Zeilen und Boundary-Recovery sind getrennt. Tatsächlicher Scrollfortschritt darf länger als 90 Sekunden dauern; blockierte Anfahrt endet nach 90 Sekunden mit `scroll_unreachable`. Sichtbarer Stillstand und verborgene Ruhezeit werden mit monotoner Uhr und tatsächlichen Sichtbarkeitsereignissen getrennt gemessen.
-- Aufmerksamkeit ist auf 120 Sekunden je Episode und kumuliert 600 Sekunden je Scanner-Aufruf begrenzt. Das aktive Budget beträgt `min(7.200.000, 300.000 + bestätigte IDs × 1.000)` ms. Mindestens eine Sekunde Pollintervall, kein Acht-Runden-Abbruch. Diagnose enthält auch erwartete Zahl, Recovery-Ergebnisse, Positionskonflikt und aktive/episodische/kumulierte Aufmerksamkeitszeiten, aber keine Video-Metadaten oder bestätigten ID-Listen.
-- Library-Schema 1 wird auf 2 migriert, IndexedDB-Struktur bleibt Version 1. Lokale Entscheidungen und vollständige Snapshots bleiben erhalten; laufende Zustände werden beim Laden unterbrochen.
+### Sicherheitsgates und Wiederaufnahme
 
-Die Codepfade erklären Risiken der bisherigen Implementierung. Ihr individueller Anteil am Live-Befund ist nicht nachgewiesen; insbesondere bleibt Throttling eine Hypothese.
+1. Neuester Scan muss `complete` sein; ein alter vollständiger Snapshot neben einem neueren Teilimport genügt nicht. Export lokal sichern und ausdrücklich bestätigen. **Verpflichtend im Executor:** `storage.claimExecution` prüft atomar den tatsächlichen vollständigen Snapshot-Datensatz, den kanonischen aktuellen Library-Stand (CAS) und die Freigabe, reserviert den Durchlauf und verbraucht die Freigabe im separaten `state`-Schlüssel `execution-ledger`. Veraltete Klone/Replay werden vor jedem Adapteraufruf abgewiesen; UI-Gates allein genügen nicht.
+2. Zusammenfassung ohne Vorauswahl, anfänglich Limit **1**, konkrete Video-IDs/Aktionen/Ziel-URLs und gesonderte Zustimmung. Freigabe maximal 15 Minuten, an exakte Aktionen und Snapshot gebunden, nicht wiederverwendbar. Kein Schreiben beim Start/Scan/Swipe.
+3. Persistentes Write-ahead-Journal mit stabilen Entscheidungs- und getrennten Add-/Remove-Schritt-UUIDs. `running` und Versuch vor Klick speichern; danach frisch beobachten und Ergebnis speichern. Speicherfehler stoppen weitere Mutationen. Zusätzlich Content → Background vor **jeder Mutation**: eigene Extension, YouTube-Sender und exakte Video-ID prüfen; Storage autorisiert atomar nur die exakt aktive beanspruchte Freigabe mit persistiertem laufendem WAL-Versuch und passendem Snapshot/Export. Einmaliges Permit pro Versuch im Ledger; rohes Bridge-Grant ohne beanspruchten WAL erlaubt keinen Klick. Background führt keine Jobs/Klicks aus.
+4. Archivziel schon vorhanden: kein Add, aber erneut **frisches `present` vor WL-Remove** erforderlich. Fehlgeschlagenes/unbekanntes Add oder fehlende Zielbestätigung verbietet Remove. Teil-Erfolg bleibt separat erhalten.
+5. WL vorab extern abwesend: `already_absent`, keine eigene erfolgreiche Änderung und kein blinder Add. `verified` allein belegt nicht, dass LaterSift etwas geändert hat. Mutationen liefern `{ changed: boolean }`; No-op (`false`) ist kein tatsächlicher Pilot-Änderungsnachweis.
+6. Unterbrechung/unklarer Klickausgang: `unknown`, keine automatische Wiederholung. Beim Laden werden laufende Operationen von `running` zu `unknown`, laufende Scans zu `interrupted`. Wiederholung nur mit **neuer ausdrücklicher Freigabe und sämtlichen frischen Preflights**; alte Add-Evidenz reicht nicht. Die UI bietet `failed`/`unknown` ausdrücklich zur Wiederwahl an: erst manuell in YouTube prüfen, neu auswählen und neu zustimmen. `verified` bleibt deaktiviert. Widerspricht frischer Zustand einem bereits verifizierten Schritt, stoppt die Entscheidung als `unknown` zur manuellen Klärung; dieser Schritt wird nicht erneut ausgeführt, auch neue Zustimmung überschreibt das nicht.
+7. Stoppen **nach der aktuellen Entscheidung**, bei Archivieren einschließlich Add/Remove/Verifikation; kein Rollback. Während Busy sind Schließen/Escape blockiert; Unmount trennt den Port und verhindert späte Panel-Commits. Fortschritt zeigt aktuelle Entscheidung und Ergebniszahlen für `verified`/`failed`/`unknown`.
+8. Erst tatsächlich geänderte, verifizierte und direkt in YouTube vom Nutzer bestätigte Pilotentscheidung erlaubt ausdrücklich **1 → 5**. Nach vollständiger 5er-Stufe mit neuem Änderungsnachweis erneut ausdrücklich **5 → 25**. Keine automatische Mock-/Executor-Promotion, kein Hochstufen allein wegen `already_absent`.
 
-## Automatisierte Validierung
+### Speicherung / Upgrade / Rechte
 
-Lokale vollständige Prüffolge für M1.1 / 0.1.1 am 17.10.2026 erfolgreich ausgeführt:
+Library-Schema **1/2 → 3**, dieselbe IndexedDB `latersift` mit Strukturversion **1**, Stores `state` und `snapshots`; separates Ledger unter `state` → `execution-ledger`, kein DB-Versionswechsel. Vorhandene Entscheidungen und vollständige Snapshots bleiben erhalten; kein destruktiver Store-Neubau. Vor Upgrade trotzdem JSON lokal exportieren und Erweiterungs-ID `latersift@almighty-atlas.github.io` sowie Browserprofil beibehalten. Temporäres Entfernen/Neuinstallation/Profilverlust kann Daten vernichten; der Export ist kein implementierter Restore.
 
-- `pnpm check`: 0 Fehler, 0 Warnungen; `pnpm lint` und `pnpm format:check` erfolgreich.
-- `pnpm test`: **95/95 Tests** in sechs Dateien, einschließlich 4.686 → 4.926, 5.000 virtualisierten Einträgen, Resume und Sichtbarkeits-Grenzfällen.
-- `pnpm test:ui`: **32/32 Tests**, je 16 in Chromium und Firefox.
-- `pnpm test:firefox-extension`: echtes MV3-Add-on in Firefox **157.0** temporär installiert, ohne Manifestwarnungen; kein angemeldeter YouTube-E2E-Test.
-- `pnpm build` und `pnpm lint:extension`: Produktionsbuild erfolgreich; Mozilla-Lint **0 Fehler, 0 Warnungen, 0 Hinweise**.
-- `pnpm package`: `artifacts/latersift-0.1.1-unsigned.xpi` erstellt. Der Dateiname folgt der Manifestversion; Abweichungen von `package.json` stoppen die Paketierung.
-- Zusätzlich die fertige **0.1.1-XPI** mit `LATERSIFT_ADDON_PATH=artifacts/latersift-0.1.1-unsigned.xpi node scripts/test-firefox.mjs` erfolgreich in Firefox installiert.
-- `git diff --check` erfolgreich.
+**Keine neuen Privilegien:** weiterhin `unlimitedStorage` und Host `https://www.youtube.com/*`; kein `cookies`, kein `tabs`-Vollzugriff. Die bestehende Host-Berechtigung wird nun zusätzlich für ausdrücklich freigegebene native DOM-Aktionen verwendet. Keine Tokens, internen APIs, Telemetrie oder Serverjobs. Event Page öffnet die App und prüft atomare Permits, führt keine Jobs/Klicks aus.
 
-Die vorhandene CI prüft alle geforderten Schritte: Installation, TypeScript/Svelte, ESLint, Format, Vitest, Build, `web-ext lint`, Browserinstallation, UI-Tests, Firefox-Add-on-Smoke-Test und Paketbau samt Artefakt-Upload. Für Implementierungscommit `a72600e` waren sowohl der [Push-Lauf](https://github.com/almighty-atlas/latersift/actions/runs/39052413774) als auch der [PR-Lauf](https://github.com/almighty-atlas/latersift/actions/runs/39052417214) erfolgreich. Lieferung über [PR #1](https://github.com/almighty-atlas/latersift/pull/1); Folgeänderungen werden vor Merge erneut geprüft. Reproduktionsplan und Resume-A/B-Prüfung: [TESTING.md](TESTING.md).
+## Verifikation und nächster Abnahmeschritt
 
-Synthetische DOM- und Browser-Fixtures sind keine Live-Evidenz. Der Firefox-Smoke-Test prüft Installation/Manifest/Background, nicht den angemeldeten Import. Historische Versuche, die Extension-UI über automatisierte `moz-extension://`-Navigation bzw. synthetisches Kürzel zu öffnen, lieferten keinen bestandenen Extension-UI-/Import-E2E-Test.
+Vollständige lokale Prüffolge für 0.2.0 am 17.10.2026:
 
-## Weitere Einordnung
+- `pnpm check`: **0 Fehler, 0 Warnungen**; Lint und Formatprüfung erfolgreich.
+- Vitest: **466/466 in 14 Dateien**, darunter **sechs vollständige Integrationstests** mit realem Executor, IndexedDB, Background-Autorität, Transport und nativem Adapter gegen synthetisches DOM. **Keine echte YouTube-Mutation.**
+- UI: **48/48 in Chromium und Firefox**.
+- Produktionsbuild erfolgreich; Web-ext: **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- Firefox **157**: echtes MV3-Add-on sowohl aus `dist` als auch aus der **finalen XPI** erfolgreich installiert; Installations-, kein Live-YouTube-Nachweis.
+- `pnpm package`: `artifacts/latersift-0.2.0-unsigned.xpi` erstellt.
 
-- Offizielle Quellen zu Firefox-MV3, Zen und YouTube-Data-API wurden geprüft; `watchLaterNotAccessible` schließt den offiziellen Watch-Later-API-Abruf aus. Keine internen Endpunkte, Cookie-Exporte oder extrahierten YouTube-Tokens.
-- **Korrektur zur Historie:** Die frühere Aussage über ungültige `gh`-Authentifizierung ist überholt; die GitHub-CLI-Authentifizierung ist heute gültig. Das beweist weder Veröffentlichung noch CI-Erfolg. Öffentliches Repository: [almighty-atlas/latersift](https://github.com/almighty-atlas/latersift).
-- Die Reihenfolge bleibt: M1 tatsächlich vollständig auslesen/sichern, erst danach M3-Schreiboperationen implementieren. Kein Mock-Erfolg ersetzt diese Grenze.
+Die vorhandene geprüfte CI enthält bereits die Prüfbefehle und Artefaktbereitstellung; keine Workflow-Änderung nötig. Der Lauf für den Feature-Branch/PR wird nach dem Push geprüft und hier verlinkt. Reproduktion und manuelle Kriterien: [TESTING.md](TESTING.md).
 
-## Nächste Schritte
+Der nächste Live-Schritt ist **genau ein bewusst ausgewähltes entbehrliches Video**, vorzugsweise **gewöhnliches Entfernen zuerst**, mit lokalem vollständigem Backup und unverändert geöffnetem Original-WL-Tab. Ergebnis zusätzlich direkt in YouTube prüfen. Bei nicht unterstütztem DOM oder `unknown` stoppen: keine Gates lockern, Klicks erzwingen, Limits erhöhen oder Speicherzustände umschreiben. Technischen Fehler mit minimalem bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. [Detaillierter erster Pilot](TESTING.md#erster-m3-live-pilot-genau-eine-entscheidung).
 
-1. Den jeweils neuesten GitHub-CI-Stand vor Merge prüfen; das unsignierte Testartefakt steht lokal unter `artifacts/latersift-0.1.1-unsigned.xpi` und im CI-Artefakt `latersift-unsigned` bereit.
-2. Den 4.926er-Befund mit aktivem YouTube-Tab reproduzieren, Hintergrund-/Aktivierungsbeobachtung und Resume A/B prüfen. Diagnose-JSON statt privater Exporte teilen.
-3. Erst nach vollständigem Live-Scan und lokal überprüftem Export: Playlist-Auswahl/Mitgliedschaft und anschließend genehmigte, einzeln verifizierte Schreiboperationen entwickeln.
-4. Signiertes dauerhaftes Add-on und Wiederaufnahme über echte Browser-Neustarts prüfen; danach optional AMO.
-
-Kein Backup-Import/Restore, keine garantierte Wiederherstellung, keine KI/Ollama. Alle Entfernen-/Archivieren-Entscheidungen bleiben lokal; keine YouTube-Writes.
+Keine Live-M3-Abnahme, garantierte Wiederherstellung oder fertige allgemeine YouTube-Schreibkompatibilität behauptet. Signierung und dauerhafte Installation bleiben separate Betriebsprüfungen, keine Voraussetzung für eine erfundene Erfolgsmeldung.

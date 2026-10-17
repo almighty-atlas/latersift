@@ -3,6 +3,7 @@ import { wait } from './adapter/scanner';
 import { createYouTubeAdapter } from './adapter/youtube';
 import { createPlaylistScroller } from './adapter/scroll';
 import type { Scan } from './model';
+import { installWriteChannel } from './write-content';
 let documentId = crypto.randomUUID();
 // YouTube uses SPA navigation: the Document object alone is not a resume epoch.
 const invalidateEvidence = () => {
@@ -12,6 +13,12 @@ window.addEventListener('yt-navigate-start', invalidateEvidence);
 window.addEventListener('popstate', invalidateEvidence);
 window.addEventListener('pagehide', invalidateEvidence);
 let active: AbortController | null = null;
+installWriteChannel(
+  () => active !== null,
+  (controller) => {
+    active = controller;
+  },
+);
 browser.runtime.onConnect.addListener((port) => {
   if (
     port.name !== 'latersift-readonly-v1' ||

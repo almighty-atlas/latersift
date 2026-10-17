@@ -109,6 +109,7 @@ export function decide(lib: Library, videoId: string, kind: DecisionKind) {
     targetPlaylist: target,
     createdAt: new Date().toISOString(),
     status: 'pending',
+    source: 'swipe',
   });
 }
 export function undo(lib: Library) {
@@ -116,7 +117,11 @@ export function undo(lib: Library) {
     (d) => d.sessionId === lib.session?.id,
   );
   if (index < 0) return false;
-  if (lib.decisions[index].status !== 'pending')
+  const decision = lib.decisions[index];
+  if (
+    decision.status !== 'pending' ||
+    Object.values(decision.journal ?? {}).some((step) => step.attempts > 0)
+  )
     throw new Error(
       'Bereits ausgeführte oder unklare Änderungen können hier nicht rückgängig gemacht werden.',
     );
@@ -142,8 +147,9 @@ export function stageCleanup(lib: Library, ids: string[]) {
       targetPlaylist: null,
       createdAt: new Date().toISOString(),
       status: 'pending',
+      source: 'cleanup',
     });
   }
 }
 export const WRITE_GATE =
-  'YouTube-Schreibzugriff gesperrt: Der angemeldete Live-Nachweis von M1 und einzeln verifizierte Schreibadapter fehlen. Deine Entscheidungen bleiben lokal vorgemerkt.';
+  'YouTube-Änderungen benötigen einen bestätigten Export und eine ausdrückliche Freigabe. Beginne mit einem einzelnen Live-Pilot; größere Stapel erfordern deine ausdrückliche Bestätigung verifizierter Änderungen.';

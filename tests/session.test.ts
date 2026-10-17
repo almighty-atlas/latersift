@@ -130,5 +130,18 @@ describe('sessions', () => {
     stageCleanup(lib, [video(1).id, video(1).id]);
     stageCleanup(lib, [video(1).id]);
     expect(lib.decisions).toHaveLength(1);
+    expect(lib.decisions[0].source).toBe('cleanup');
+    expect(lib.decisions[0].kind).toBe('remove');
+  });
+  it('rejects undo for any journal attempt even when overall status is pending', () => {
+    const lib = library();
+    startSession(lib, 1, 'all');
+    decide(lib, video(1).id, 'remove');
+    expect(lib.decisions[0].source).toBe('swipe');
+    lib.decisions[0].journal = {
+      remove: { id: 'step', attempts: 1, status: 'unknown' },
+    };
+    expect(() => undo(lib)).toThrow();
+    expect(lib.decisions).toHaveLength(1);
   });
 });

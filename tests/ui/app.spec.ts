@@ -348,10 +348,27 @@ test('keyboard swipe, undo, pause, reload and summary', async ({ page }) => {
     .click();
   await expect(page.getByText('Runde abgeschlossen.')).toBeVisible();
   await page.getByRole('button', { name: 'Vorgemerkt 2' }).click();
-  await expect(page.getByText('0 YouTube-Änderungen ausgeführt')).toBeVisible();
   await expect(
-    page.getByText('YouTube-Schreibzugriff gesperrt:', { exact: false }),
+    page.getByRole('region', { name: 'YouTube-Schreibpilot' }),
   ).toBeVisible();
+  await expect(
+    page.getByText('Pilotlimit: 1 Entscheidung pro Freigabe.'),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Exportbestätigung für aktuellen Snapshot fehlt.', {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'YouTube-Arbeitstab öffnen und Auswahl ausführen',
+    }),
+  ).toBeDisabled();
+  for (const checkbox of await page
+    .getByRole('checkbox', { name: /^Auswählen:/ })
+    .all()) {
+    await expect(checkbox).not.toBeChecked();
+  }
 });
 test('cleanup is separate, confirmed locally, unknown videos excluded', async ({
   page,
