@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "LaterSift",
+  "version": "0.1.0",
+  "description": "Swipe through your Watch Later backlog. Lokaler Read-only-Import und Swipe-Entscheidungen.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "latersift@almighty-atlas.github.io",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": ["unlimitedStorage"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "action": {
+    "default_title": "LaterSift \u00f6ffnen",
+    "default_icon": "icon.svg"
+  },
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self' data: https://i.ytimg.com https://img.youtube.com"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "LaterSift \u00f6ffnen"
+    }
+  }
+}
