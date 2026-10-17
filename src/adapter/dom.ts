@@ -113,7 +113,13 @@ export function hasContinuation(doc: Document) {
     ...doc.querySelectorAll(
       'ytd-playlist-video-list-renderer ytd-continuation-item-renderer',
     ),
-  ].some((el) => !el.hasAttribute('hidden'));
+  ].some((el) => {
+    if (el.closest('[hidden], [aria-hidden="true"]')) return false;
+    const style = doc.defaultView?.getComputedStyle(el);
+    return (
+      !style || (style.display !== 'none' && style.visibility !== 'hidden')
+    );
+  });
 }
 export function emptyNotice(doc: Document) {
   return /(?:This playlist has no videos|Diese Playlist enthält keine Videos|Keine Videos in dieser Playlist)/i.test(

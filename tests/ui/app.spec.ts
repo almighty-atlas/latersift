@@ -1,21 +1,30 @@
 import { test, expect, type Page } from '@playwright/test';
-async function seed(page: Page) {
+import type { Scan } from '../../src/model';
+
+async function seed(
+  page: Page,
+  scanOverrides: Partial<Scan> = {},
+  {
+    priorScans = [],
+    videoCount = 3,
+  }: { priorScans?: Partial<Scan>[]; videoCount?: number } = {},
+) {
   await page.goto('/');
   await page.waitForSelector('text=Watch Later importieren');
-  await page.evaluate(async () => {
-    const db = await new Promise<IDBDatabase>((resolve) => {
-      const req = indexedDB.open('latersift', 1);
-      req.onsuccess = () => resolve(req.result);
-    });
-    const tx = db.transaction('state', 'readwrite');
-    tx.objectStore('state').put(
-      {
-        schemaVersion: 1,
-        archivePlaylist: 'PL1234567890123456',
-        session: null,
-        decisions: [],
-        scans: [
-          {
+  await page.evaluate(
+    async ({ scanOverrides, priorScans, videoCount }) => {
+      const db = await new Promise<IDBDatabase>((resolve) => {
+        const req = indexedDB.open('latersift', 1);
+        req.onsuccess = () => resolve(req.result);
+      });
+      const tx = db.transaction('state', 'readwrite');
+      tx.objectStore('state').put(
+        {
+          schemaVersion: 1,
+          archivePlaylist: 'PL1234567890123456',
+          session: null,
+          decisions: [],
+          scans: [...priorScans, scanOverrides].map((overrides) => ({
             id: 'fixture-explicit',
             startedAt: '2026-10-17T00:00:00Z',
             finishedAt: '2026-10-17T00:00:00Z',
@@ -23,7 +32,7 @@ async function seed(page: Page) {
             expectedCount: 3,
             unidentifiableRows: 0,
             message: 'TEST FIXTURE, NOT LIVE YOUTUBE',
-            videos: Array.from({ length: 3 }, (_, n) => ({
+            videos: Array.from({ length: videoCount }, (_, n) => ({
               id: String(n).padStart(11, '0'),
               url: `https://www.youtube.com/watch?v=${String(n).padStart(11, '0')}`,
               title: n === 2 ? '[Private video]' : `Fixture Video ${n + 1}`,
@@ -37,17 +46,19 @@ async function seed(page: Page) {
               scannedAt: '2026-10-17T00:00:00Z',
               originalPlaylist: 'WL',
             })),
-          },
-        ],
-      },
-      'library',
-    );
-    await new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    db.close();
-  });
+            ...overrides,
+          })),
+        },
+        'library',
+      );
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    },
+    { scanOverrides, priorScans, videoCount },
+  );
   await page.reload();
   await expect(
     page.getByRole('button', { name: 'Runde starten' }),
@@ -61,12 +72,251 @@ test('empty state is honest, import has no simulated YouTube results', async ({
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByText('Kein passender Tab gefunden')).toBeAttached();
   await expect(
-    page.getByRole('button', { name: 'Read-only-Import starten' }),
+    page.getByRole('button', { name: 'Read-only-Import neu starten' }),
   ).toBeDisabled();
   await expect(page.getByRole('alert').last()).toContainText(
     'geladenen Firefox-/Zen-Erweiterung',
   );
 });
+for (const status of [
+  'incomplete',
+  'interrupted',
+  'running',
+  'waiting',
+  'needs_attention',
+] as const) {
+  test(`persisted ${status} scan shows durable partial progress and disabled resume without an extension tab`, async ({
+    page,
+  }) => {
+    await seed(page, {
+      status,
+      finishedAt: null,
+      expectedCount: 8,
+      unidentifiableRows: 2,
+      message: 'Gesicherter Teilbestand; Vollständigkeit nicht bestätigt.',
+    });
+    await page.getByRole('button', { name: '↓ Import', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('3 / 8 Videos · 37,5 %')).toBeVisible();
+    await expect(
+      dialog.getByText(
+        status === 'incomplete'
+          ? 'Teilbestand / Prüfung offen'
+          : 'Unterbrochen / pausiert',
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(
+        'Gesicherter Teilbestand; Vollständigkeit nicht bestätigt.',
+      ),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText('Letzter Fortschritt: unbekannt'),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText('Nur lokal gesicherte Checkpoints werden angezeigt.'),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText('2 Einträge ohne sichere Video-ID erkannt.'),
+    ).toBeVisible();
+    const resume = dialog.getByRole('button', {
+      name: 'Fortsetzen / erneut versuchen',
+    });
+    await expect(resume).toBeVisible();
+    await expect(resume).toBeDisabled();
+    await expect(dialog.getByLabel('Verbundener Watch-Later-Tab')).toHaveValue(
+      '',
+    );
+    await expect(
+      dialog.getByRole('button', { name: 'Read-only-Import neu starten' }),
+    ).toBeDisabled();
+    await expect(
+      dialog.getByRole('button', { name: 'YouTube-Tab aktivieren ↗' }),
+    ).toBeDisabled();
+    await expect(
+      dialog.getByText('Vollständig geprüft', { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText('Import gespeichert', { exact: true }),
+    ).toHaveCount(0);
+  });
+}
+
+for (const { expectedCount, progress, videoCount = 3 } of [
+  { expectedCount: null, progress: '3 / ? Videos · Prozent unbekannt' },
+  { expectedCount: 2, progress: '3 / 2 Videos · 100,0 %' },
+  { expectedCount: 41, videoCount: 39, progress: '39 / 41 Videos · 95,1 %' },
+]) {
+  test(`persisted incomplete progress handles expected count ${expectedCount} without claiming completion`, async ({
+    page,
+  }) => {
+    await seed(page, { status: 'incomplete', expectedCount }, { videoCount });
+    await page.getByRole('button', { name: '↓ Import', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(progress)).toBeVisible();
+    await expect(
+      dialog.getByText('Teilbestand / Prüfung offen', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText('Vollständig geprüft', { exact: true }),
+    ).toHaveCount(0);
+  });
+}
+
+for (const totalAttentionMs of [undefined, 9000]) {
+  test(`persisted background-tab warning and technical diagnostics with totalAttentionMs ${totalAttentionMs}`, async ({
+    page,
+  }) => {
+    const message =
+      'YouTube lädt momentan nicht weiter. Aktiviere den YouTube-Tab, um das Nachladen fortzusetzen.';
+    const diagnostics = {
+      lastProgressAt: '2026-10-17T00:00:00Z',
+      visibility: 'hidden',
+      reason: 'background_tab_stalled',
+      highestPosition: 5,
+      missingPositions: [2, 4],
+      recoveryAttempts: 2,
+      recoveryResults: ['scroll_retry_no_progress'],
+      positionConflict: false,
+      activeMs: 12000,
+      attentionMs: 3000,
+      ...(totalAttentionMs === undefined ? {} : { totalAttentionMs }),
+      scroll: { container: 'document', top: 1200, height: 2400, viewport: 800 },
+      continuation: true,
+      confirmedCount: 8,
+    };
+    await seed(page, {
+      status: 'needs_attention',
+      finishedAt: null,
+      expectedCount: 8,
+      message,
+      diagnostics: { ...diagnostics, documentId: 'private-document-id' },
+    });
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: 'Runde starten' }),
+    ).toBeEnabled();
+    await page.getByRole('button', { name: '↓ Import', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(message, { exact: true })).toBeVisible();
+    await expect(
+      dialog.getByText('Unterbrochen / pausiert', { exact: true }),
+    ).toBeVisible();
+    await expect(dialog.getByText('3 / 8 Videos · 37,5 %')).toBeVisible();
+    await expect(
+      dialog.getByText(/Letzter Fortschritt: vor \d+ s/),
+    ).toBeVisible();
+    await expect(dialog.getByRole('alert').last()).toContainText(
+      'geladenen Firefox-/Zen-Erweiterung',
+    );
+    await expect(
+      dialog.getByRole('button', { name: 'YouTube-Tab aktivieren ↗' }),
+    ).toBeDisabled();
+    await expect(
+      dialog.getByRole('button', { name: 'Fortsetzen / erneut versuchen' }),
+    ).toBeDisabled();
+    await expect(
+      dialog.getByText('Vollständig geprüft', { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText('Import gespeichert', { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText('Diagnose kopiert · ohne Video-Metadaten'),
+    ).toHaveCount(0);
+
+    await dialog
+      .getByText('Import-Diagnose (ohne Video-Metadaten)', { exact: true })
+      .click();
+    const output = dialog.getByRole('textbox', {
+      name: 'Import-Diagnose JSON',
+    });
+    await expect(output).toBeVisible();
+    await expect(output).toHaveAttribute('readonly', '');
+    const json = await output.inputValue();
+    expect(JSON.parse(json)).toEqual({
+      count: 3,
+      expectedCount: 8,
+      status: 'interrupted',
+      diagnostics,
+    });
+    for (const privateValue of [
+      'fixture-explicit',
+      'Fixture Video',
+      'Fixture Channel',
+      '[Private video]',
+      '00000000000',
+      '00000000001',
+      '00000000002',
+      'https://www.youtube.com/watch?v=',
+      'private-document-id',
+      message,
+    ]) {
+      expect(json).not.toContain(privateValue);
+    }
+    expect(json).not.toMatch(
+      /"(?:id|documentId|title|channel|url|videos|message)"\s*:/,
+    );
+  });
+}
+
+test('latest complete scan does not offer resume for an older incomplete scan', async ({
+  page,
+}) => {
+  await seed(
+    page,
+    {
+      id: 'fixture-latest-complete',
+      startedAt: '2026-10-17T01:00:00Z',
+      finishedAt: '2026-10-17T01:01:00Z',
+    },
+    {
+      priorScans: [
+        {
+          id: 'fixture-older-incomplete',
+          status: 'incomplete',
+          finishedAt: null,
+          expectedCount: 8,
+          message: 'Älterer Teilbestand',
+        },
+      ],
+    },
+  );
+  await page.getByRole('button', { name: '↓ Import', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(
+    dialog.getByText('Vollständig geprüft', { exact: true }),
+  ).toBeVisible();
+  await expect(dialog.getByText('3 / 3 Videos · 100,0 %')).toBeVisible();
+  await expect(
+    dialog.getByText('Älterer Teilbestand', { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByRole('button', { name: 'Fortsetzen / erneut versuchen' }),
+  ).toHaveCount(0);
+  const restart = dialog.getByRole('button', {
+    name: 'Read-only-Import neu starten',
+  });
+  await expect(restart).toBeVisible();
+  await expect(restart).toBeDisabled();
+  await dialog
+    .getByText('Import-Diagnose (ohne Video-Metadaten)', { exact: true })
+    .click();
+  expect(
+    JSON.parse(
+      await dialog
+        .getByRole('textbox', { name: 'Import-Diagnose JSON' })
+        .inputValue(),
+    ),
+  ).toEqual({
+    count: 3,
+    expectedCount: 3,
+    status: 'complete',
+    diagnostics: null,
+  });
+});
+
 test('keyboard swipe, undo, pause, reload and summary', async ({ page }) => {
   await seed(page);
   await page.getByRole('button', { name: 'Runde starten' }).click();

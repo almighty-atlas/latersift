@@ -9,6 +9,11 @@ async function collect(dir, prefix = '') {
   }
 }
 await collect('dist');
+const manifest = JSON.parse(new TextDecoder().decode(entries['manifest.json']));
+const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+if (manifest.version !== pkg.version)
+  throw new Error('Manifest- und Paketversion stimmen nicht überein.');
+const output = `artifacts/latersift-${manifest.version}-unsigned.xpi`;
 await mkdir('artifacts', { recursive: true });
-await writeFile('artifacts/latersift-0.1.0-unsigned.xpi', zipSync(entries));
-console.log('artifacts/latersift-0.1.0-unsigned.xpi');
+await writeFile(output, zipSync(entries));
+console.log(output);

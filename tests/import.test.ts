@@ -11,11 +11,15 @@ import { scanWatchLater, type ScanEnvironment } from '../src/adapter/scanner';
 const fixture = readFileSync('tests/fixtures/playlist.html', 'utf8');
 function environment(html = fixture) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  let now = Date.UTC(2026, 0, 1);
   const env: ScanEnvironment = {
     doc,
+    now: () => now,
     url: () => 'https://www.youtube.com/playlist?list=WL',
     advance: () => {},
-    wait: async () => {},
+    wait: async (ms) => {
+      now += Math.max(1, ms);
+    },
   };
   return env;
 }
@@ -119,7 +123,7 @@ describe('Read-only import', () => {
     );
     const env = environment();
     env.url = () => 'https://www.youtube.com/watch?v=aaaaaaaaaaa';
-    expect((await scan(env)).status).toBe('failed');
+    expect((await scan(env)).status).toBe('interrupted');
   });
   it('reports a local checkpoint failure without reporting success', async () => {
     await expect(
