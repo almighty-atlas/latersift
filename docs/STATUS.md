@@ -52,7 +52,7 @@ Lokale vollständige Prüffolge für M1.1 / 0.1.1 am 17.10.2026 erfolgreich ausg
 - Zusätzlich die fertige **0.1.1-XPI** mit `LATERSIFT_ADDON_PATH=artifacts/latersift-0.1.1-unsigned.xpi node scripts/test-firefox.mjs` erfolgreich in Firefox installiert.
 - `git diff --check` erfolgreich.
 
-Die vorhandene CI prüft bereits alle geforderten Schritte: Installation, TypeScript/Svelte, ESLint, Format, Vitest, Build, `web-ext lint`, Browserinstallation, UI-Tests, Firefox-Add-on-Smoke-Test und Paketbau samt Artefakt-Upload. Sie wird bei Push/Pull Request ausgelöst; der Lauf nach dem Push steht aus. **Kein CI-Erfolg ist hier behauptet.** Ergebnisse sind nach tatsächlicher Ausführung für den endgültigen Stand zu protokollieren. Reproduktionsplan und Resume-A/B-Prüfung: [TESTING.md](TESTING.md).
+Die vorhandene CI prüft alle geforderten Schritte: Installation, TypeScript/Svelte, ESLint, Format, Vitest, Build, `web-ext lint`, Browserinstallation, UI-Tests, Firefox-Add-on-Smoke-Test und Paketbau samt Artefakt-Upload. Für Implementierungscommit `a72600e` waren sowohl der [Push-Lauf](https://github.com/almighty-atlas/latersift/actions/runs/39052413774) als auch der [PR-Lauf](https://github.com/almighty-atlas/latersift/actions/runs/39052417214) erfolgreich. Lieferung über [PR #1](https://github.com/almighty-atlas/latersift/pull/1); Folgeänderungen werden vor Merge erneut geprüft. Reproduktionsplan und Resume-A/B-Prüfung: [TESTING.md](TESTING.md).
 
 Synthetische DOM- und Browser-Fixtures sind keine Live-Evidenz. Der Firefox-Smoke-Test prüft Installation/Manifest/Background, nicht den angemeldeten Import. Historische Versuche, die Extension-UI über automatisierte `moz-extension://`-Navigation bzw. synthetisches Kürzel zu öffnen, lieferten keinen bestandenen Extension-UI-/Import-E2E-Test.
 
@@ -64,7 +64,7 @@ Synthetische DOM- und Browser-Fixtures sind keine Live-Evidenz. Der Firefox-Smok
 
 ## Nächste Schritte
 
-1. GitHub-CI des Feature-Branches/PR prüfen und nur nach grünen Prüfungen mergen.
+1. Den jeweils neuesten GitHub-CI-Stand vor Merge prüfen; das unsignierte Testartefakt steht lokal unter `artifacts/latersift-0.1.1-unsigned.xpi` und im CI-Artefakt `latersift-unsigned` bereit.
 2. Den 4.926er-Befund mit aktivem YouTube-Tab reproduzieren, Hintergrund-/Aktivierungsbeobachtung und Resume A/B prüfen. Diagnose-JSON statt privater Exporte teilen.
 3. Erst nach vollständigem Live-Scan und lokal überprüftem Export: Playlist-Auswahl/Mitgliedschaft und anschließend genehmigte, einzeln verifizierte Schreiboperationen entwickeln.
 4. Signiertes dauerhaftes Add-on und Wiederaufnahme über echte Browser-Neustarts prüfen; danach optional AMO.
