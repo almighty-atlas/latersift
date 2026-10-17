@@ -12,32 +12,52 @@ export async function openWatchLater() {
     url: 'https://www.youtube.com/playlist?list=WL',
   });
 }
+export async function activateYouTubeTab(tabId: number): Promise<void> {
+  const { default: browser } = await import('webextension-polyfill');
+  const tab = await browser.tabs.update(tabId, { active: true });
+  if (tab.windowId === undefined)
+    throw new Error('YouTube-Fenster nicht gefunden.');
+  await browser.windows.update(tab.windowId, { focused: true });
+}
 export async function connectScan(
   tabId: number,
   onCheckpoint: (scan: Scan) => Promise<void>,
   onFinish: (error?: string) => void,
+  resume?: Scan,
 ): Promise<Runtime.Port> {
   const { default: browser } = await import('webextension-polyfill');
   const port = browser.tabs.connect(tabId, { name: 'latersift-readonly-v1' });
   let finished = false;
+  let closing = false;
+  let disconnected = false;
   let tasks = Promise.resolve();
   port.onMessage.addListener((message: unknown) => {
-    if (!message || typeof message !== 'object' || !('type' in message)) return;
+    if (
+      closing ||
+      finished ||
+      !message ||
+      typeof message !== 'object' ||
+      !('type' in message)
+    )
+      return;
     if (message.type === 'checkpoint' && 'scan' in message && 'id' in message) {
       // Serialized, even if a future adapter emits faster than storage can commit.
       tasks = tasks
         .then(async () => {
+          if (finished) return;
           await onCheckpoint(message.scan as Scan);
-          port.postMessage({ ack: message.id });
+          if (!disconnected) port.postMessage({ ack: message.id });
         })
         .catch((error) => {
+          if (finished) return;
           finished = true;
           port.disconnect();
           onFinish(`Speicherung fehlgeschlagen: ${String(error)}`);
         });
     }
     if (message.type === 'done' || message.type === 'error') {
-      tasks.then(() => {
+      closing = true;
+      void tasks.then(() => {
         if (!finished) {
           finished = true;
           port.disconnect();
@@ -47,15 +67,24 @@ export async function connectScan(
     }
   });
   port.onDisconnect.addListener(() => {
-    if (!finished) {
-      finished = true;
-      void tasks.then(() =>
+    disconnected = true;
+    if (!finished && !closing) {
+      closing = true;
+      void tasks.then(() => {
+        if (finished) return;
+        finished = true;
         onFinish(
           'Verbindung getrennt. Letzter bestätigter Teilbestand ist gesichert.',
-        ),
-      );
+        );
+      });
     }
   });
-  port.postMessage({ type: 'scan' });
+  try {
+    port.postMessage(resume ? { type: 'scan', resume } : { type: 'scan' });
+  } catch (error) {
+    finished = true;
+    port.disconnect();
+    throw error;
+  }
   return port;
 }

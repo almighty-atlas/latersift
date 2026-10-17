@@ -7,6 +7,7 @@
     safeCandidate,
     type DecisionKind,
     type Library,
+    type Scan,
   } from './model';
   import {
     catalog,
@@ -27,7 +28,12 @@
     saveLibrary,
     exportBackup,
   } from './storage';
-  import { connectScan, openWatchLater, youtubeTabs } from './bridge';
+  import {
+    activateYouTubeTab,
+    connectScan,
+    openWatchLater,
+    youtubeTabs,
+  } from './bridge';
   import { availabilityLabels, decisionLabels, operationLabels } from './i18n';
   import { watchLaterLocation } from './adapter/dom';
   import './style.css';
@@ -50,7 +56,12 @@
   let cleanupSelected = $state<string[]>([]),
     cleanupConfirm = $state(false);
   let startPoint: { x: number; y: number } | null = null;
-  let port: Runtime.Port | null = null;
+  let port = $state.raw<Runtime.Port | null>(null);
+  let connectedTab = $state<number | null>(null);
+  let pausing = $state(false);
+  let now = $state(Date.now());
+  const activeScan = (s: Scan) =>
+    ['running', 'waiting', 'needs_attention'].includes(s.status);
   let releaseLock: (() => void) | undefined;
   const videos = $derived(catalog(lib));
   const card = $derived(currentVideo(lib));
@@ -59,6 +70,70 @@
     lib.decisions.filter((d) => d.kind !== 'defer' && d.status === 'pending'),
   );
   const scan = $derived(latestScan(lib));
+  const resumable = $derived(scan?.status !== 'complete' ? scan : undefined);
+  const progressPercent = $derived(
+    scan?.expectedCount
+      ? Math.min(100, (scan.videos.length / scan.expectedCount) * 100)
+      : null,
+  );
+  const progressAge = $derived(
+    scan?.diagnostics?.lastProgressAt
+      ? Math.max(
+          0,
+          Math.floor(
+            (now - Date.parse(scan.diagnostics.lastProgressAt)) / 1000,
+          ),
+        )
+      : null,
+  );
+  const scanLabels: Record<string, string> = {
+    running: 'Import läuft',
+    waiting: 'Warten auf YouTube',
+    needs_attention: 'Aufmerksamkeit erforderlich',
+    complete: 'Vollständig geprüft',
+    interrupted: 'Unterbrochen / pausiert',
+    incomplete: 'Teilbestand / Prüfung offen',
+    failed: 'Import fehlgeschlagen',
+  };
+  const diagnosticJSON = $derived.by(() => {
+    if (!scan) return '';
+    const d = scan.diagnostics;
+    return JSON.stringify(
+      {
+        count: scan.videos.length,
+        expectedCount: scan.expectedCount,
+        status: scan.status,
+        diagnostics: d
+          ? {
+              lastProgressAt: d.lastProgressAt,
+              visibility: d.visibility,
+              reason: d.reason,
+              highestPosition: d.highestPosition,
+              missingPositions: d.missingPositions,
+              recoveryAttempts: d.recoveryAttempts,
+              recoveryResults: d.recoveryResults,
+              positionConflict: d.positionConflict,
+              activeMs: d.activeMs,
+              attentionMs: d.attentionMs,
+              totalAttentionMs:
+                'totalAttentionMs' in d ? d.totalAttentionMs : undefined,
+              scroll: d.scroll
+                ? {
+                    container: d.scroll.container,
+                    top: d.scroll.top,
+                    height: d.scroll.height,
+                    viewport: d.scroll.viewport,
+                  }
+                : null,
+              continuation: d.continuation,
+              confirmedCount: d.confirmedCount,
+            }
+          : null,
+      },
+      null,
+      2,
+    );
+  });
   const cleanup = $derived(videos.filter(safeCandidate));
   const disabled = $derived(!ready || !owner || busy || importing);
   const hasDuration = $derived(videos.some((v) => v.durationSeconds !== null));
@@ -66,6 +141,9 @@
 
   onMount(() => {
     let disposed = false;
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 1000);
     void navigator.locks.request(
       'latersift-editor',
       { ifAvailable: true },
@@ -79,7 +157,7 @@
         try {
           const loaded = await loadLibrary();
           const interrupted = latestScan(loaded);
-          if (interrupted?.status === 'running') {
+          if (interrupted && activeScan(interrupted)) {
             interrupted.status = 'interrupted';
             interrupted.message =
               'Vorheriger Import unterbrochen. Gesicherter Teilbestand vorhanden.';
@@ -100,6 +178,7 @@
     );
     return () => {
       disposed = true;
+      clearInterval(timer);
       port?.disconnect();
       releaseLock?.();
     };
@@ -167,14 +246,47 @@
       error = 'Bitte die Erweiterung in Zen oder Firefox laden.';
     }
   }
-  async function importVideos() {
+  async function activateTab() {
+    const tabId = importing
+      ? connectedTab
+      : (connectedTab ?? (selectedTab ? Number(selectedTab) : null));
+    if (tabId === null) return;
+    error = '';
+    try {
+      await activateYouTubeTab(tabId);
+    } catch (e) {
+      error = `YouTube-Tab konnte nicht aktiviert werden: ${String(e)}`;
+    }
+  }
+  async function copyDiagnostics() {
+    error = '';
+    try {
+      await navigator.clipboard.writeText(diagnosticJSON);
+      feedback = 'Diagnose kopiert · ohne Video-Metadaten';
+    } catch (e) {
+      error = `Diagnose konnte nicht kopiert werden: ${String(e)}`;
+    }
+  }
+  function pauseImport() {
+    if (!port || pausing) return;
+    error = '';
+    try {
+      port.postMessage({ type: 'cancel' });
+      pausing = true;
+    } catch (e) {
+      error = `Import konnte nicht pausiert werden: ${String(e)}`;
+    }
+  }
+  async function importVideos(resume?: Scan) {
     if (disabled || !selectedTab) return;
+    const tabId = Number(selectedTab);
     importing = true;
+    pausing = false;
     feedback = '';
     error = '';
     try {
       port = await connectScan(
-        Number(selectedTab),
+        tabId,
         async (checkpoint) => {
           const copy = structuredClone(lib);
           await saveCheckpoint(copy, checkpoint);
@@ -182,10 +294,11 @@
         },
         async (message) => {
           importing = false;
+          pausing = false;
           port = null;
           if (message) error = message;
           const last = latestScan(lib);
-          if (last?.status === 'running') {
+          if (last && activeScan(last)) {
             busy = true;
             try {
               const copy = structuredClone(lib);
@@ -204,10 +317,13 @@
             ? 'Import unterbrochen; bestätigte Checkpoints bleiben erhalten.'
             : 'Import gespeichert';
         },
+        resume ? structuredClone(resume) : undefined,
       );
+      connectedTab = tabId;
     } catch (e) {
       importing = false;
-      error = String(e);
+      port = null;
+      error = `Import konnte nicht gestartet werden: ${String(e)}`;
     }
   }
   function exportJSON() {
@@ -293,7 +409,7 @@
   function focusTrap(node: HTMLElement) {
     const prior = document.activeElement;
     const selector =
-      'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),[tabindex="0"]';
+      'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea,summary,[tabindex="0"]';
     queueMicrotask(() => node.querySelector<HTMLElement>(selector)?.focus());
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -623,39 +739,74 @@
                 >{tab.title || `YouTube-Tab ${tab.id}`} (Tab {tab.id})</option
               >{/each}</select
           >
+          {#if error}<p role="alert" class="error">{error}</p>{/if}
+          <button
+            onclick={activateTab}
+            disabled={importing
+              ? connectedTab === null
+              : connectedTab === null && !selectedTab}
+            >YouTube-Tab aktivieren ↗</button
+          >
+          {#if importing && !scan}<p>
+              Import wird vorbereitet … Noch kein Checkpoint gesichert.
+            </p>{/if}
           {#if scan}<div class="scan-status">
               <strong
                 >{scan.videos.length.toLocaleString('de-DE')} / {scan.expectedCount?.toLocaleString(
                   'de-DE',
-                ) ?? '?'} Videos</strong
-              ><span
-                >{scan.status === 'complete'
-                  ? 'Vollständig geprüft'
-                  : scan.status === 'running'
-                    ? 'Import läuft'
-                    : 'Teilbestand / Prüfung offen'}</span
-              >
+                ) ?? '?'} Videos · {progressPercent === null
+                  ? 'Prozent unbekannt'
+                  : `${progressPercent.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`}</strong
+              ><span>{scanLabels[scan.status] ?? scan.status}</span>
+              <p>
+                Letzter Fortschritt: {progressAge !== null &&
+                Number.isFinite(progressAge)
+                  ? `vor ${progressAge} s`
+                  : 'unbekannt'}
+              </p>
               <p>{scan.message}</p>
+              <small>Nur lokal gesicherte Checkpoints werden angezeigt.</small>
+              <details>
+                <summary>Import-Diagnose (ohne Video-Metadaten)</summary>
+                <textarea
+                  aria-label="Import-Diagnose JSON"
+                  readonly
+                  value={diagnosticJSON}
+                  rows="14"
+                ></textarea>
+                <button onclick={copyDiagnostics}>Diagnose kopieren</button>
+              </details>
               {#if scan.unidentifiableRows}<p>
                   {scan.unidentifiableRows} Einträge ohne sichere Video-ID erkannt.
                 </p>{/if}
             </div>{/if}
           <p class="hint">
             Fehlende Videos? In YouTubes Playlist-Menü gegebenenfalls „Nicht
-            verfügbare Videos anzeigen“ aktivieren. Ein erneuter Import startet
-            oben; lokale Entscheidungen und frühere vollständige Snapshots
-            bleiben erhalten. Maximal 20 Minuten pro Versuch.
+            verfügbare Videos anzeigen“ aktivieren. Fortsetzen verwendet den
+            letzten gesicherten Teilbestand; lokale Entscheidungen und frühere
+            vollständige Snapshots bleiben erhalten.
           </p>
           {#if importing}<button
               class="primary"
-              onclick={() => port?.postMessage({ type: 'cancel' })}
-              >Import pausieren</button
-            >{:else}<button
-              class="primary"
-              onclick={importVideos}
+              onclick={pauseImport}
+              disabled={!port || pausing}
+              >{pausing
+                ? 'Pausieren … Checkpoint wird gesichert'
+                : 'Import pausieren'}</button
+            >{:else}
+            {#if resumable}<button
+                class="primary"
+                onclick={() => importVideos(resumable)}
+                disabled={disabled || !selectedTab}
+                >Fortsetzen / erneut versuchen</button
+              >{/if}
+            <button
+              class={resumable ? '' : 'primary'}
+              onclick={() => importVideos()}
               disabled={disabled || !selectedTab}
-              >Read-only-Import starten</button
-            >{/if}
+              >Read-only-Import neu starten</button
+            >
+          {/if}
         {:else if panel === 'settings'}
           <div class="round-settings">
             <div class="section-title">

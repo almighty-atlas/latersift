@@ -9,5 +9,6 @@ export interface YouTubeAdapter {
   scanWatchLater(
     signal: AbortSignal,
     checkpoint: (scan: Scan) => Promise<void>,
+    resume?: Scan,
   ): Promise<Scan>;
 }

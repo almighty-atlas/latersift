@@ -14,11 +14,43 @@ export interface Video {
   scannedAt: string;
   originalPlaylist: 'WL';
 }
+export interface ScanDiagnostics {
+  lastProgressAt: string;
+  visibility: string;
+  reason: string;
+  highestPosition: number;
+  missingPositions: number[];
+  recoveryAttempts: number;
+  scroll: {
+    container: string;
+    top: number;
+    height: number;
+    viewport: number;
+  } | null;
+  continuation: boolean;
+  confirmedCount: number;
+  documentId?: string;
+  positionConflict?: boolean;
+  activeMs?: number;
+  attentionMs?: number;
+  totalAttentionMs?: number;
+  recoveryResults?: string[];
+}
 export interface Scan {
   id: string;
   startedAt: string;
   finishedAt: string | null;
-  status: 'running' | 'complete' | 'interrupted' | 'incomplete' | 'failed';
+  status:
+    | 'running'
+    | 'waiting'
+    | 'needs_attention'
+    | 'complete'
+    | 'interrupted'
+    | 'incomplete'
+    | 'failed';
+  diagnostics?: ScanDiagnostics;
+  // IDs whose positions were actually observed in diagnostics.documentId.
+  confirmedVideoIds?: string[];
   expectedCount: number | null;
   videos: Video[];
   unidentifiableRows: number;
@@ -44,14 +76,14 @@ export interface Session {
   createdAt: string;
 }
 export interface Library {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   scans: Scan[];
   decisions: Decision[];
   session: Session | null;
   archivePlaylist: string;
 }
 export const emptyLibrary = (): Library => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   scans: [],
   decisions: [],
   session: null,
