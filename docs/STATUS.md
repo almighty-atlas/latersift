@@ -1,6 +1,32 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.5 – ausschließlich Playlist-Feed-Diagnose
+## Aktuell: 0.2.6 – Playlist-Identität unabhängig vom Namen
+
+Basis: **0.2.5**, Stand: 18.10.2026. [Aktueller Identitäts-/Namensvertrag, Diagnose, Datenschutz und nächster Zen-Test](PLAYLIST-IDENTITY.md).
+
+- **Nutzerbestätigte Live-Evidenz mit 0.2.5:** 18 sichtbare `yt-lockup-view-model`-Karten, alle `missing_title_node`, `no_playlist_link: 0`, `conflicting_playlist_ids: 0`; zwölf Samples mit jeweils einem Playlist-Link und zwei Watch-Links. Kartenwachstum **0 → 4 → 18** und echtes Scrollen beobachtet. Das belegt den bisherigen Titel-Selektor als Akzeptanzblocker bei vorhandener URL-Identität, nicht eine konkrete aktuelle Heading-/ARIA-Beziehung. Die tatsächliche Live-Namensrelation bleibt **UNKNOWN**.
+- **Aktueller Codevertrag:** `name: string | null`; neue Einträge setzen explizit `identityEvidence: playlist-url`, `nameStatus: confirmed | unknown`, `nameSource: playlist-heading | aria-labelledby | legacy-title | unknown | conflicting` und `writability: unknown`. Die Metadaten bleiben für gespeicherte Legacy-Einträge optional. Genau eine eindeutige gültige tatsächliche sichtbare Playlist-URL derselben Karte genügt für Identität; URL-Prüfungen unverändert streng. Fehlende/mehrdeutige Namen verwerfen keine belegte ID, keine Namen-/ID-Vermutungen.
+- **Namensvertrag nur synthetisch belegt:** exklusive Playlist-Link-/Heading-Beziehung oder einzelne dokumentweit eindeutige, sichtbare, nicht geteilte lokale `aria-labelledby`-Referenz auf Überschrift/dedizierten Titel; Legacy-Titel nur mit eindeutiger Linkbeziehung. Nur sichtbarer Text derselben nächsten Karte; versteckte Unterelemente und verschachtelte Karteninhalte werden ausgeschlossen. Keine beliebigen `aria-label`-, Thumbnail- oder Kartentext-Fallbacks. Unbekannte künftige Titelstrukturen dürfen unbekannt bleiben.
+- **Scan und Historie getrennt:** Deduplizierung über kanonische URLs im aktuellen Scan; bestätigter Name bleibt bei späterer namenloser Beobachtung erhalten. Bestätigte Namenskonflikte bleiben scanweit `name: null`. Historische Namen bleiben separat stale erhalten, bestätigen aber keinen frischen unbekannten Namen. Legacy-Strings erscheinen als „gespeichert (älterer Katalog)“, nicht als neu bestätigt.
+- **Diagnose / UI:** Namensgründe können Warnungen an akzeptierten Identitäten sein; kein unsupported allein wegen fehlenden Namens. `identifiedUnnamed` zählt karteneigene namenlose Identitäten vor Namenserhaltung, letzte Runde/Maximum, keine Pollingsummen oder eindeutigen Katalog-IDs. Höchstens zwölf Samples einschließlich Namenswarnungen; `titleStructure` enthält nur freigegebene feste Strukturzähler. Bereinigte Kopie ohne URLs, Namen, tatsächliche IDs oder Attributwerte. Neutral getrennte Anzeige: ID nachgewiesen, Name bestätigt/unbekannt, Schreibbarkeit nicht bestätigt.
+- **Unverändert:** Rechte, Fokus-/Arbeitstabverhalten, YouTube-Writes, Schreibgates, WL-Scanner und Vollständigkeitsprüfung. Feed bleibt Teilbestand, nie belegtes `complete`. Kein eigener aktueller angemeldeter Live-Test, kein garantierter Live-Namensnachweis.
+
+### Qualitätsergebnisse 0.2.6
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **890/890 in 20 Dateien**, darunter **109 Playlist-Parser-/Scannerfälle**, **89 Diagnose-/Datenschutzfälle** und **4 Katalog-/Historienfälle**. Synthetisch geprüft: 0 → 4 → 18 namenlose Lockups mit zusätzlichen Watch-Links, semantische Namensbelege, fehlende/mehrdeutige Titel, widersprüchliche IDs, gleiche Namen verschiedener IDs, scanweite Konflikte und Deduplizierung. Versteckter Text und verschachtelte Karten dürfen keine Namen anderer Elemente einschleusen.
+- `pnpm test:ui`: **92/92 in Chromium und Firefox**. 18 namenlose ID-belegte Einträge, gemischte Namenszustände, lokale Zielwahl ohne Schreibzugriff, Persistenz/Reload, Legacy-Namen ohne falsche frische Bestätigung und Erhalt historischer Namen geprüft.
+- `pnpm package`: Produktionsbuild und `artifacts/latersift-0.2.6-unsigned.xpi` erfolgreich; `pnpm lint:extension`: **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- `pnpm test:firefox-extension` und `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.6-unsigned.xpi node scripts/test-firefox.mjs`: echtes MV3-Add-on aus `dist` und finaler XPI in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
+- SHA-256 der lokal getesteten XPI: `8b8e3d072e3c0c6ca1bcac6e1cecc1950b4070c5e3a490e5fed811a01c44d12e`.
+
+Synthetische Fixtures und Add-on-Installation ersetzen keine angemeldete Live-Abnahme. Der Nutzerbefund bestätigt den alten Titelblocker und vorhandene Playlist-Links; die Aufnahme und Namensauflösung durch 0.2.6 sind noch nicht im angemeldeten Zen bestätigt. Keine Signierung/AMO-Veröffentlichung.
+
+**Nächster Schritt:** im angemeldeten Zen mit 0.2.6 genau einmal „Playlists aktualisieren“ im inaktiven Arbeitstab. Bei derselben DOM-Lage mit 18 eindeutigen gültigen sichtbaren Playlist-URLs sind 18 akzeptierte Einträge zu erwarten, auch bei ausschließlich unbekannten Namen. Das ist kein festgelegter heutiger Zähler, keine Vollständigkeits- oder Namensgarantie. Nur Arbeitstab-Diagnose und bereinigtes Playlist-Diagnose-JSON zurückmelden; keine URLs, Namen, persönlichen Screenshots oder privaten Backups. [Genaue Checkliste](PLAYLIST-IDENTITY.md#nächster-zen-test--genau-eine-hintergrundaktualisierung). WL-Abnahme separat, keine echten Schreibtests.
+
+## Historischer Stand: 0.2.5 – ausschließlich Playlist-Feed-Diagnose
+
+Die folgenden Aussagen und Ergebnisse beschreiben **0.2.5**. Insbesondere die damalige Titelpflicht und rein ablehnungsbezogene Parsersemantik sind durch den [0.2.6-Vertrag](PLAYLIST-IDENTITY.md) überholt; alte Dokumente bleiben als historische Evidenz unverändert.
 
 Basis: **0.2.4**, Stand: 18.10.2026. [Playlist-Feed-Diagnose: Evidenz, exakte Felder, Datenschutz und nächster Zen-Test](PLAYLIST-FEED-DIAGNOSTICS.md). Der Nutzer erlaubt ausdrücklich einen reinen Diagnoseschritt trotz noch unzureichender Evidenz für die Parserursache.
 
@@ -21,7 +47,7 @@ Basis: **0.2.4**, Stand: 18.10.2026. [Playlist-Feed-Diagnose: Evidenz, exakte Fe
 
 DOM-/UI-Tests sind synthetisch; Installationsprüfungen sind keine angemeldete Zen-/Feed-Abnahme. Keine Live-Parserkorrektur behauptet, keine Signierung/AMO-Veröffentlichung.
 
-Nächster Schritt: im angemeldeten Zen mit 0.2.5 genau einmal „Playlists aktualisieren“, danach Arbeitstab-Diagnose und bereinigtes Playlist-Diagnose-JSON kopieren, **nicht das private Backup**. Fehlen Titelknoten, leitet die Sample-Struktur eine gezielte bereinigte DOM-Inspektion an; ohne diese Evidenz keine geratenen Selektoren hinzufügen. WL-Abnahme weiterhin separat.
+Damals nächster Schritt (durch den oben dokumentierten 0.2.5-Nutzerlauf inzwischen erfolgt): im angemeldeten Zen mit 0.2.5 genau einmal „Playlists aktualisieren“, danach Arbeitstab-Diagnose und bereinigtes Playlist-Diagnose-JSON kopieren, **nicht das private Backup**. Fehlen Titelknoten, leitet die Sample-Struktur eine gezielte bereinigte DOM-Inspektion an; ohne diese Evidenz keine geratenen Selektoren hinzufügen. WL-Abnahme weiterhin separat.
 
 ## Historischer Stand: 0.2.4 / M3.2.1 – Arbeitstab-Readiness und Diagnose
 
@@ -124,6 +150,8 @@ Stand: 17.10.2026 · **0.2.0**. M1 ist **nutzerbestätigt abgeschlossen**; M3 is
 Der frühere Teilimport in Zen/CachyOS hatte 4.686 statt 4.926 IDs, höchste Position 4.686, unidentifizierbare Zeilen 0 und `incomplete`. Dieser Befund ist durch den späteren nutzerbestätigten vollständigen Scan **als aktueller M1-Abnahmestand überholt**. Die Null bezeichnete nicht die Verfügbarkeit aller Videos. Fortschritt nach Tabaktivierung war eine Beobachtung, kein isolierter Throttling-Nachweis; die 240 später eingeblendeten Einträge dürfen nicht nachträglich als bewiesener Throttlingfehler dargestellt werden.
 
 ## Implementierter Stand
+
+Aktueller lesender Feedvertrag ab 0.2.6: [Playlist-Identität und unabhängige Namensevidenz](PLAYLIST-IDENTITY.md). Die historischen M3.2-Dokumente beschreiben ältere Titelsemantik, nicht die heutige Aufnahme namenloser Identitäten.
 
 | Meilenstein  | Vorhanden                                                                                                                                                                 | Grenze / offene Abnahme                                                                                                                                             |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

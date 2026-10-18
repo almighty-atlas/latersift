@@ -10,6 +10,11 @@
   } from './work-tabs';
   import WorkTabDiagnostics from './WorkTabDiagnostics.svelte';
   import { formatPlaylistDiagnostic } from './playlist-diagnostics';
+  import {
+    mergePlaylistHistory,
+    playlistDisplayName,
+    playlistNameLabel,
+  } from './playlist-catalog';
 
   let {
     disabled = false,
@@ -82,14 +87,7 @@
     error = '';
     workTabReports = [];
     diagnosticFeedback = '';
-    previous = [
-      ...new Map(
-        [...previous, ...(catalog?.entries ?? [])].map((entry) => [
-          entry.id,
-          entry,
-        ]),
-      ).values(),
-    ];
+    previous = mergePlaylistHistory(previous, catalog?.entries ?? []);
     let work: Awaited<ReturnType<typeof createWorkTab>> | undefined;
     try {
       localStorage.setItem(`${key}-previous`, JSON.stringify(previous));
@@ -175,8 +173,11 @@
     <ul aria-label="Verifizierte Playlist-IDs">
       {#each catalog.entries as entry (entry.id)}
         <li>
-          <strong>{entry.name}</strong> · ID aus URL: <code>{entry.id}</code> ·
-          Sichtbarkeit: {entry.visibility} · Eigentümer: unbekannt
+          <strong>{playlistDisplayName(entry)}</strong> · {playlistNameLabel(
+            entry,
+          )} · ID aus URL: <code>{entry.id}</code> (nachgewiesen) ·
+          Sichtbarkeit: {entry.visibility} · Eigentümer: unbekannt · Schreibbarkeit:
+          nicht bestätigt
           <button
             onclick={() => onchoose(entry.id)}
             disabled={disabled || busy || !/^PL[\w-]+$/.test(entry.id)}
@@ -188,10 +189,13 @@
     <details class="dialog-diagnostic">
       <summary>Technische Playlist-Diagnose</summary>
       <p class="hint">
-        Parsergründe, Struktursamples und Scroll-/Nachladebefunde. Latest zählt
-        die letzte Runde, Peaks den höchsten gleichzeitig beobachteten Wert,
-        nicht die Summe wiederholter Versuche. Keine Playlist-Namen, IDs oder
-        URL-Werte. Ein nicht scrollbares Dokument kann regulär sein.
+        Identitätsfehler und Namenswarnungen werden getrennt vom Katalogbestand
+        erfasst. Ein fehlender oder mehrdeutiger Name verwirft keine belegte
+        Playlist-ID. Latest zählt die letzte Runde, Peaks den höchsten
+        gleichzeitig beobachteten Wert, nicht die Summe wiederholter Versuche.
+        Struktursamples enthalten auch identifizierte Karten ohne Namen. Keine
+        Playlist-Namen, IDs oder URL-Werte. Ein nicht scrollbares Dokument kann
+        regulär sein.
       </p>
       <textarea
         aria-label="Bereinigte Playlist-Feed-Diagnose"
@@ -209,7 +213,11 @@
       >
       <ul>
         {#each previous.filter((entry) => !catalog?.entries.some((current) => current.id === entry.id)) as entry (entry.id)}
-          <li>{entry.name} · {entry.id}</li>
+          <li>
+            {playlistDisplayName(entry)} · {entry.id} · {playlistNameLabel(
+              entry,
+            )} · Schreibbarkeit: nicht bestätigt
+          </li>
         {/each}
       </ul>
     </details>

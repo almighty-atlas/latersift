@@ -1,6 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { Scan } from '../../src/model';
-import type { PlaylistCatalog } from '../../src/adapter/playlists';
+import type {
+  PlaylistCatalog,
+  PlaylistEntry,
+} from '../../src/adapter/playlists';
 
 async function seed(
   page: Page,
@@ -591,7 +594,9 @@ async function fakeDiscovery(page: Page, fail = false, denyCopy = false) {
 
 async function fakePlaylistFeed(
   page: Page,
-  batches: { id: string; name: string }[][] | null = null,
+  batches:
+    | (Pick<PlaylistEntry, 'id' | 'name'> & Partial<PlaylistEntry>)[][]
+    | null = null,
   navigation:
     'delayed' | 'marker-stripped' | 'redirect' | 'consent' | null = null,
   fixture: Partial<PlaylistCatalog> | Record<string, unknown> = {},
@@ -842,6 +847,329 @@ function rejectedPlaylistFeed(): PlaylistCatalog {
   };
 }
 
+function unnamedPlaylist(id: string): PlaylistEntry {
+  return {
+    id,
+    name: null,
+    nameStatus: 'unknown',
+    nameSource: 'unknown',
+    identityEvidence: 'playlist-url',
+    writability: 'unknown',
+    url: `https://www.youtube.com/playlist?list=${id}`,
+    visibility: 'unknown',
+    ownership: 'unknown',
+  };
+}
+
+function unnamedPlaylistFeed(): PlaylistCatalog {
+  const fixture = rejectedPlaylistFeed();
+  fixture.entries = Array.from({ length: 18 }, (_, index) =>
+    unnamedPlaylist(`PLunnamedFixture${index}`),
+  );
+  fixture.status = 'partial';
+  fixture.message = '18 Playlist-IDs belegt; Namen und Vollständigkeit offen.';
+  const diagnostics = fixture.diagnostics;
+  diagnostics.reason = 'stable_unverified_end';
+  diagnostics.unsupportedCards = 0;
+  const parser = diagnostics.parser!;
+  parser.latest = {
+    no_playlist_link: 0,
+    conflicting_playlist_ids: 0,
+    missing_title_node: 18,
+    conflicting_titles: 0,
+    ambiguous_title_link: 0,
+    hidden_card: 0,
+    incomplete_rendering: 0,
+  };
+  parser.peaks = { ...parser.latest };
+  parser.identifiedUnnamed = { latest: 18, peak: 18 };
+  parser.sources = { 'yt-lockup-view-model': 18 };
+  parser.samplesTruncated = true;
+  parser.samples = Array.from({ length: 12 }, (_, index) => ({
+    index,
+    tag: 'yt-lockup-view-model',
+    reasons: ['missing_title_node'],
+    titleNodes: { playlistTitle: 0, videoTitle: 0, lockupTitle: 0 },
+    childTags: { a: 3 },
+    links: {
+      playlist: 1,
+      watch: 2,
+      channel: 0,
+      external: 0,
+      other: 0,
+      invalid: 0,
+      missing: 0,
+    },
+    distinctValidIds: 1,
+    titleStructure: {
+      canonicalLinkCount: 1,
+      linkHeadings: 0,
+      metadataHeadings: 0,
+      ariaLabelledbyLinks: 0,
+      localHeadingReferences: 0,
+      missingOrAmbiguousReferences: 0,
+      watchLinkedHeadings: 0,
+      canonicalLinkHasAriaLabel: 0,
+    },
+  }));
+  // Transport fixture only: actual 0 -> 4 -> 18 DOM growth is covered by unit tests.
+  diagnostics.cardCount = {
+    initial: 0,
+    latest: 18,
+    max: 18,
+    changes: [
+      { round: 1, total: 0, accepted: 0, rejected: 0, hidden: 0 },
+      { round: 2, total: 4, accepted: 4, rejected: 0, hidden: 0 },
+      { round: 3, total: 18, accepted: 18, rejected: 0, hidden: 0 },
+    ],
+  };
+  return fixture;
+}
+
+test('0.2.6 all 18 unnamed URL-backed playlists remain usable locally and persist null names', async ({
+  page,
+}) => {
+  await seed(page);
+  const fixture = unnamedPlaylistFeed();
+  await fakePlaylistFeed(page, null, null, fixture);
+  const panel = await openPlaylistFeed(page);
+  const rows = panel
+    .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+    .getByRole('listitem');
+  await expect(panel.getByRole('status')).toContainText(
+    '18 Playlists · Teilbestand / Vollständigkeit offen',
+  );
+  await expect(panel.getByRole('status')).not.toContainText('unsupported_dom');
+  const expectUnnamed = async () => {
+    await expect(rows).toHaveCount(18);
+    await expect(rows.locator('strong')).toHaveText(
+      Array(18).fill('Playlist ohne bestätigten Namen'),
+    );
+    for (const [index, entry] of fixture.entries.entries()) {
+      await expect(rows.nth(index)).toContainText('Name: unbekannt');
+      await expect(rows.nth(index)).toContainText(
+        `ID aus URL: ${entry.id} (nachgewiesen)`,
+      );
+      await expect(rows.nth(index).locator('code')).toHaveText(entry.id);
+      await expect(rows.nth(index)).toContainText(
+        'Schreibbarkeit: nicht bestätigt',
+      );
+    }
+    await expect(
+      panel.getByText('Name: bestätigt', { exact: false }),
+    ).toHaveCount(0);
+  };
+  await expectUnnamed();
+  const { text } = await readPlaylistFeedDiagnostic(page);
+  const report = JSON.parse(text);
+  expect(report.parser.identifiedUnnamed).toEqual({ latest: 18, peak: 18 });
+  expect(report.parser.latest.missing_title_node).toBe(18);
+  expect(report.parser.peaks).toEqual(report.parser.latest);
+  expect(report.unsupportedCards).toBe(0);
+  expect(report.cardCount).toEqual(fixture.diagnostics.cardCount);
+  expect(report.parser.samples).toEqual(fixture.diagnostics.parser!.samples);
+  expect(report.parser.samplesTruncated).toBe(true);
+  expect(
+    report.parser.samples.every(
+      (sample: { links: { watch: number }; distinctValidIds: number }) =>
+        sample.links.watch === 2 && sample.distinctValidIds === 1,
+    ),
+  ).toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Reflect.get(globalThis, 'playlistTransport').disconnected,
+      ),
+    )
+    .toBe(true);
+  const before = await page.evaluate(() =>
+    Reflect.get(globalThis, 'playlistTransport'),
+  );
+  await rows
+    .nth(17)
+    .getByRole('button', { name: 'Als lokales Archivziel wählen' })
+    .click();
+  await expect(page.getByLabel('YouTube-Playlist-URL oder PL…-ID')).toHaveValue(
+    fixture.entries[17].id,
+  );
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+  ).toEqual(before);
+  expect(before.requests).toEqual([{ type: 'playlists' }, { ack: 1 }]);
+  expect(before.acknowledgedAfterSave).toBe(true);
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('latersift-playlist-catalog-v1')!),
+    ),
+  ).toEqual(fixture);
+  await page.reload();
+  await page.getByRole('button', { name: 'Playlists', exact: true }).click();
+  await expectUnnamed();
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('latersift-playlist-catalog-v1')!),
+    ),
+  ).toEqual(fixture);
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, 'playlistTransport').created,
+    ),
+  ).toEqual([]);
+});
+
+test('0.2.6 mixed naming evidence and equal names keep distinct playlist IDs', async ({
+  page,
+}) => {
+  await seed(page);
+  const fixture = unnamedPlaylistFeed();
+  fixture.entries = [
+    {
+      ...unnamedPlaylist('PLsameNameA'),
+      name: 'Same archive',
+      nameStatus: 'confirmed',
+      nameSource: 'playlist-heading',
+    },
+    unnamedPlaylist('PLunknownName'),
+    {
+      ...unnamedPlaylist('PLsameNameB'),
+      name: 'Same archive',
+      nameStatus: 'confirmed',
+      nameSource: 'aria-labelledby',
+    },
+    {
+      ...unnamedPlaylist('PLuntrustedName'),
+      name: 'Must not be displayed',
+      nameStatus: 'unknown',
+    },
+  ];
+  await fakePlaylistFeed(page, null, null, fixture);
+  const panel = await openPlaylistFeed(page);
+  const rows = panel
+    .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+    .getByRole('listitem');
+  await expect(rows).toHaveCount(4);
+  await expect(rows.locator('strong')).toHaveText([
+    'Same archive',
+    'Playlist ohne bestätigten Namen',
+    'Same archive',
+    'Playlist ohne bestätigten Namen',
+  ]);
+  for (const [index, entry] of fixture.entries.entries()) {
+    await expect(rows.nth(index).locator('code')).toHaveText(entry.id);
+    await expect(rows.nth(index)).toContainText(
+      index % 2 === 0 ? 'Name: bestätigt' : 'Name: unbekannt',
+    );
+    await expect(rows.nth(index)).toContainText(
+      'Schreibbarkeit: nicht bestätigt',
+    );
+  }
+  await expect(panel).not.toContainText('Must not be displayed');
+  for (const index of [0, 2]) {
+    await rows
+      .nth(index)
+      .getByRole('button', { name: 'Als lokales Archivziel wählen' })
+      .click();
+    await expect(
+      page.getByLabel('YouTube-Playlist-URL oder PL…-ID'),
+    ).toHaveValue(fixture.entries[index].id);
+  }
+});
+
+test('0.2.6 legacy names stay historical after unknown refreshes and reload', async ({
+  page,
+}) => {
+  await seed(page);
+  const legacy = {
+    ...unnamedPlaylist('PLhistoryName'),
+    name: 'Legacy preserved archive',
+  };
+  delete legacy.nameStatus;
+  delete legacy.nameSource;
+  const fixture = unnamedPlaylistFeed();
+  fixture.entries = [legacy];
+  await page.evaluate(
+    (catalog) =>
+      localStorage.setItem(
+        'latersift-playlist-catalog-v1',
+        JSON.stringify(catalog),
+      ),
+    fixture,
+  );
+  await fakePlaylistFeed(page, [
+    [unnamedPlaylist(legacy.id)],
+    [unnamedPlaylist(legacy.id)],
+    [unnamedPlaylist('PLnewCurrent')],
+  ]);
+  await page.reload();
+  await page.getByRole('button', { name: 'Playlists', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+  const current = panel
+    .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+    .getByRole('listitem');
+  await expect(current.locator('strong')).toHaveText(legacy.name);
+  await expect(current).toContainText('Name: gespeichert (älterer Katalog)');
+  await expect(current).not.toContainText('Name: bestätigt');
+  const refresh = panel.getByRole('button', {
+    name: 'Playlists aktualisieren',
+    exact: true,
+  });
+  for (let round = 0; round < 2; round++) {
+    await refresh.click();
+    await expect(current.locator('strong')).toHaveText(
+      'Playlist ohne bestätigten Namen',
+    );
+    await expect(current).toContainText('Name: unbekannt');
+    await expect(refresh).toBeEnabled();
+    expect(
+      await page.evaluate(() =>
+        JSON.parse(
+          localStorage.getItem('latersift-playlist-catalog-v1-previous')!,
+        ),
+      ),
+    ).toEqual([legacy]);
+    expect(
+      await page.evaluate(
+        () =>
+          JSON.parse(localStorage.getItem('latersift-playlist-catalog-v1')!)
+            .entries[0].name,
+      ),
+    ).toBeNull();
+  }
+  await refresh.click();
+  await expect(current.locator('code')).toHaveText('PLnewCurrent');
+  await expect(refresh).toBeEnabled();
+  for (let reload = 0; reload < 2; reload++) {
+    const summary = panel.getByText(
+      'Vorheriger Katalog (veraltet, vor dieser Aktualisierung)',
+      { exact: true },
+    );
+    await summary.click();
+    const stale = panel
+      .locator('details')
+      .filter({
+        has: page.getByText(
+          'Vorheriger Katalog (veraltet, vor dieser Aktualisierung)',
+          { exact: true },
+        ),
+      })
+      .getByRole('listitem');
+    await expect(stale).toHaveText(
+      `${legacy.name} · ${legacy.id} · Name: gespeichert (älterer Katalog) · Schreibbarkeit: nicht bestätigt`,
+    );
+    await expect(stale.getByRole('button')).toHaveCount(0);
+    await expect(panel).not.toContainText('Name: bestätigt');
+    expect(
+      await page.evaluate(() =>
+        JSON.parse(
+          localStorage.getItem('latersift-playlist-catalog-v1-previous')!,
+        ),
+      ),
+    ).toEqual([legacy]);
+    await page.reload();
+    await page.getByRole('button', { name: 'Playlists', exact: true }).click();
+  }
+});
+
 async function readPlaylistFeedDiagnostic(page: Page) {
   const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
   const textarea = panel.getByRole('textbox', {
@@ -1016,6 +1344,22 @@ for (const clipboard of ['success', 'denied', 'unavailable'] as const) {
             childTags: { a: 1, [privateText]: 99 },
             reasons: [...sample.reasons, privateText],
             links: { ...sample.links, [privateText]: 99 },
+            titleStructure: {
+              canonicalLinkCount: 1,
+              linkHeadings: 0,
+              metadataHeadings: 1,
+              ariaLabelledbyLinks: 0,
+              localHeadingReferences: 0,
+              missingOrAmbiguousReferences: 0,
+              watchLinkedHeadings: 2,
+              canonicalLinkHasAriaLabel: 0,
+              name: privateText,
+              id: privateText,
+              url: privateText,
+              ariaLabel: privateText,
+              headingText: privateText,
+              [privateText]: 99,
+            },
           })),
         },
         scrollContainers: {
@@ -1069,6 +1413,16 @@ for (const clipboard of ['success', 'denied', 'unavailable'] as const) {
         tag: 'other',
         childTags: { a: 1 },
         reasons: [...sample.reasons, 'unknown'],
+        titleStructure: {
+          canonicalLinkCount: 1,
+          linkHeadings: 0,
+          metadataHeadings: 1,
+          ariaLabelledbyLinks: 0,
+          localHeadingReferences: 0,
+          missingOrAmbiguousReferences: 0,
+          watchLinkedHeadings: 2,
+          canonicalLinkHasAriaLabel: 0,
+        },
       })),
     );
     expect(report.scrollContainers.containers).toEqual([
@@ -1182,9 +1536,10 @@ test('0.2.4 legacy playlist catalog and stale entries survive reload without opt
       })
       .click();
     await expect(
-      panel.getByText('Legacy stale archive · PLlegacyStale123', {
-        exact: true,
-      }),
+      panel.getByText(
+        'Legacy stale archive · PLlegacyStale123 · Name: gespeichert (älterer Katalog) · Schreibbarkeit: nicht bestätigt',
+        { exact: true },
+      ),
     ).toBeVisible();
     const { text } = await readPlaylistFeedDiagnostic(page);
     expect(JSON.parse(text)).toEqual(legacy.diagnostics);
@@ -1624,7 +1979,7 @@ test('successive partial playlist refreshes retain older IDs without duplicating
   await refreshAndExpect(['Updated archive B', 'Original archive C']);
   await staleSummary.click();
   await expect(stale.getByRole('listitem')).toHaveText([
-    'Older archive A · PLfixtureA',
+    'Older archive A · PLfixtureA · Name: gespeichert (älterer Katalog) · Schreibbarkeit: nicht bestätigt',
   ]);
   await refreshAndExpect(['Updated archive C', 'Current archive D']);
   const expectRetainedCatalog = async () => {
@@ -1635,8 +1990,8 @@ test('successive partial playlist refreshes retain older IDs without duplicating
       'Current archive D',
     ]);
     await expect(stale.getByRole('listitem')).toHaveText([
-      'Older archive A · PLfixtureA',
-      'Updated archive B · PLfixtureB',
+      'Older archive A · PLfixtureA · Name: gespeichert (älterer Katalog) · Schreibbarkeit: nicht bestätigt',
+      'Updated archive B · PLfixtureB · Name: gespeichert (älterer Katalog) · Schreibbarkeit: nicht bestätigt',
     ]);
     await expect(stale.getByRole('button')).toHaveCount(0);
     await expect(

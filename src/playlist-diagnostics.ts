@@ -34,6 +34,7 @@ const scrollTags = [
   'ytd-section-list-renderer',
 ] as const;
 
+// Legacy reason keys include naming warnings on accepted playlist identities.
 const rejectionReasons = [
   'no_playlist_link',
   'conflicting_playlist_ids',
@@ -152,8 +153,18 @@ export function formatPlaylistDiagnostic(value: unknown): string {
       parser === undefined
         ? undefined
         : {
+            // Per-card latest-round counts and maxima, not rejection-only totals.
             latest: counts(own(parser, 'latest'), rejectionReasons),
             peaks: counts(own(parser, 'peaks'), rejectionReasons),
+            // Card-local unnamed identities before name retention, not catalog totals.
+            ...(own(parser, 'identifiedUnnamed') !== undefined
+              ? {
+                  identifiedUnnamed: counts(own(parser, 'identifiedUnnamed'), [
+                    'latest',
+                    'peak',
+                  ]),
+                }
+              : {}),
             sources: tagCounts(own(parser, 'sources')),
             samplesTruncated: own(parser, 'samplesTruncated') === true,
             samples: bounded(own(parser, 'samples')).map((sample) => ({
@@ -170,6 +181,20 @@ export function formatPlaylistDiagnostic(value: unknown): string {
               childTags: tagCounts(own(sample, 'childTags')),
               links: counts(own(sample, 'links'), linkTypes),
               distinctValidIds: number(own(sample, 'distinctValidIds')),
+              ...(own(sample, 'titleStructure') !== undefined
+                ? {
+                    titleStructure: counts(own(sample, 'titleStructure'), [
+                      'canonicalLinkCount',
+                      'linkHeadings',
+                      'metadataHeadings',
+                      'ariaLabelledbyLinks',
+                      'localHeadingReferences',
+                      'missingOrAmbiguousReferences',
+                      'watchLinkedHeadings',
+                      'canonicalLinkHasAriaLabel',
+                    ]),
+                  }
+                : {}),
             })),
           },
     cardCount:

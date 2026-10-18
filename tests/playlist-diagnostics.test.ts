@@ -31,6 +31,16 @@ const sample = {
   },
   distinctValidIds: 1,
 };
+const titleStructure = {
+  canonicalLinkCount: 1,
+  linkHeadings: 2,
+  metadataHeadings: 3,
+  ariaLabelledbyLinks: 4,
+  localHeadingReferences: 5,
+  missingOrAmbiguousReferences: 6,
+  watchLinkedHeadings: 7,
+  canonicalLinkHasAriaLabel: 8,
+};
 const legacy: PlaylistCatalog['diagnostics'] = {
   reason: 'scanning',
   rounds: 3,
@@ -54,6 +64,20 @@ describe('playlist diagnostic copy/display boundary', () => {
     expect(parse({ ...legacy, scroll: null }).scroll).toBeNull();
   });
 
+  it('preserves legacy parser fields without introducing new optional counts', () => {
+    const diagnostic = {
+      ...legacy,
+      parser: {
+        latest: reasons,
+        peaks: reasons,
+        samples: [sample],
+        samplesTruncated: false,
+        sources: {},
+      },
+    };
+    expect(parse(diagnostic)).toEqual(diagnostic);
+  });
+
   it('preserves all current typed diagnostic fields', () => {
     const diagnostic: PlaylistCatalog['diagnostics'] = {
       ...legacy,
@@ -61,7 +85,8 @@ describe('playlist diagnostic copy/display boundary', () => {
       parser: {
         latest: reasons,
         peaks: reasons,
-        samples: [sample],
+        identifiedUnnamed: { latest: 2, peak: 5 },
+        samples: [{ ...sample, titleStructure }],
         samplesTruncated: true,
         sources: { 'yt-lockup-view-model': 3, other: 2 },
       },
@@ -114,7 +139,17 @@ describe('playlist diagnostic copy/display boundary', () => {
 
   it('drops private keys and values at every nested boundary', () => {
     const secret = 'PRIVATE_NAME_PL123_https://private.example/playlist';
-    const extra = { [secret]: secret, name: secret, id: secret, url: secret };
+    const extra = {
+      [secret]: secret,
+      name: secret,
+      id: secret,
+      url: secret,
+      text: secret,
+      href: secret,
+      'aria-label': secret,
+      'aria-labelledby': secret,
+      toJSON: () => secret,
+    };
     const hostile = {
       ...legacy,
       ...extra,
@@ -125,6 +160,7 @@ describe('playlist diagnostic copy/display boundary', () => {
         ...extra,
         latest: { ...extra, no_playlist_link: secret },
         peaks: { ...extra, hidden_card: { ...extra } },
+        identifiedUnnamed: { ...extra, latest: secret, peak: { ...extra } },
         sources: { ...extra, div: secret, other: 2 },
         samplesTruncated: secret,
         samples: [
@@ -137,6 +173,14 @@ describe('playlist diagnostic copy/display boundary', () => {
             childTags: { ...extra, a: secret },
             links: { ...extra, playlist: secret },
             distinctValidIds: { ...extra },
+            titleStructure: {
+              ...extra,
+              ...Object.fromEntries(
+                Object.keys(titleStructure).map((key) => [key, { ...extra }]),
+              ),
+              canonicalLinkCount: 2,
+              linkHeadings: secret,
+            },
           },
         ],
       },
@@ -165,11 +209,18 @@ describe('playlist diagnostic copy/display boundary', () => {
       'hidden_card',
     ]);
     expect(result.parser.sources).toEqual({ div: 0, other: 2 });
+    expect(result.parser.identifiedUnnamed).toEqual({ latest: 0, peak: 0 });
+    expect(result.parser.samples[0].titleStructure).toEqual({
+      ...Object.fromEntries(Object.keys(titleStructure).map((key) => [key, 0])),
+      canonicalLinkCount: 2,
+    });
     expect(result.parser.samples[0].childTags).toEqual({ a: 0 });
     expect(result.scrollContainers.containers[0].tag).toBe('other');
     expect(result.scrollContainers.containers[0].selected).toBe(false);
     expect(result.parser.samplesTruncated).toBe(false);
-    expect(text).not.toMatch(/"(?:name|id|url)":/);
+    expect(text).not.toMatch(
+      /"(?:name|id|url|text|href|aria-label|aria-labelledby|toJSON)":/,
+    );
   });
 
   it.each(['legacy private error', '', 'unknown_error_code'])(
@@ -202,7 +253,18 @@ describe('playlist diagnostic copy/display boundary', () => {
     const result = parse({
       rounds: input,
       scroll: { top: input },
-      parser: { latest: { hidden_card: input }, samples: [{ index: input }] },
+      parser: {
+        latest: { hidden_card: input },
+        identifiedUnnamed: { latest: input, peak: input },
+        samples: [
+          {
+            index: input,
+            titleStructure: Object.fromEntries(
+              Object.keys(titleStructure).map((key) => [key, input]),
+            ),
+          },
+        ],
+      },
       cardCount: { changes: [{ total: input }] },
       scrollContainers: { containers: [{ height: input }] },
       pagination: { nextButtons: input },
@@ -211,9 +273,63 @@ describe('playlist diagnostic copy/display boundary', () => {
     expect(result.scroll.top).toBe(expected);
     expect(result.parser.latest.hidden_card).toBe(expected);
     expect(result.parser.samples[0].index).toBe(expected);
+    expect(result.parser.identifiedUnnamed).toEqual({
+      latest: expected,
+      peak: expected,
+    });
+    expect(result.parser.samples[0].titleStructure).toEqual(
+      Object.fromEntries(
+        Object.keys(titleStructure).map((key) => [key, expected]),
+      ),
+    );
     expect(result.cardCount.changes[0].total).toBe(expected);
     expect(result.scrollContainers.containers[0].height).toBe(expected);
     expect(result.pagination.nextButtons).toBe(expected);
+  });
+
+  it.each([null, 'private', 12, true, [], [{ latest: 99 }]])(
+    'reconstructs malformed optional count blocks without coercion: %j',
+    (value) => {
+      const result = parse({
+        parser: {
+          identifiedUnnamed: value,
+          samples: [{ titleStructure: value }],
+        },
+      });
+      expect(result.parser.identifiedUnnamed).toEqual({ latest: 0, peak: 0 });
+      expect(result.parser.samples[0].titleStructure).toEqual(
+        Object.fromEntries(Object.keys(titleStructure).map((key) => [key, 0])),
+      );
+    },
+  );
+
+  it('omits undefined or inherited optional blocks and ignores inherited counts', () => {
+    for (const parser of [
+      {
+        identifiedUnnamed: undefined,
+        samples: [{ titleStructure: undefined }],
+      },
+      Object.assign(
+        Object.create({ identifiedUnnamed: { latest: 99, peak: 99 } }),
+        {
+          samples: [Object.create({ titleStructure })],
+        },
+      ),
+    ]) {
+      const result = parse({ parser });
+      expect(result.parser).not.toHaveProperty('identifiedUnnamed');
+      expect(result.parser.samples[0]).not.toHaveProperty('titleStructure');
+    }
+    const result = parse({
+      parser: {
+        identifiedUnnamed: Object.create({ latest: 99, peak: 99 }),
+        samples: [{ titleStructure: Object.create(titleStructure) }],
+      },
+    });
+    expect(result.parser.identifiedUnnamed).toEqual({ latest: 0, peak: 0 });
+    expect(result.parser.samples[0].titleStructure).toEqual(
+      Object.fromEntries(Object.keys(titleStructure).map((key) => [key, 0])),
+    );
   });
 
   it.each([true, false, 'true', 1, {}, null])(
@@ -248,12 +364,21 @@ describe('playlist diagnostic copy/display boundary', () => {
       round: index,
     }));
     const result = parse({
-      parser: { samples: items.map((item) => ({ ...item, reasons: items })) },
+      parser: {
+        identifiedUnnamed: { latest: 30, peak: 40 },
+        samples: items.map((item) => ({
+          ...item,
+          reasons: items,
+          titleStructure,
+        })),
+      },
       cardCount: { changes: items },
       scrollContainers: { containers: items },
     });
     expect(result.parser.samples).toHaveLength(12);
     expect(result.parser.samples[11].index).toBe(11);
+    expect(result.parser.samples[11].titleStructure).toEqual(titleStructure);
+    expect(result.parser.identifiedUnnamed).toEqual({ latest: 30, peak: 40 });
     expect(result.parser.samples[0].reasons).toHaveLength(12);
     expect(result.cardCount.changes).toHaveLength(12);
     expect(result.scrollContainers.containers).toHaveLength(12);
@@ -268,7 +393,7 @@ describe('playlist diagnostic copy/display boundary', () => {
     inherited.scroll = Object.create({ container: 'div', top: 99 });
     inherited.parser = {
       sources: Object.create({ div: 99 }),
-      samples: [Object.create(sample)],
+      samples: [Object.create({ ...sample, titleStructure })],
     };
     const result = parse(inherited);
     expect(result.reason).toBe('unknown');
@@ -277,13 +402,21 @@ describe('playlist diagnostic copy/display boundary', () => {
     expect(result.parser.sources).toEqual({});
     expect(result.parser.samples[0].tag).toBe('other');
     expect(result.parser.samples[0].index).toBe(0);
+    expect(result.parser.samples[0]).not.toHaveProperty('titleStructure');
     const unsafe = {
       toJSON: () => {
         throw new Error('Unknown toJSON must not run');
       },
     };
     expect(() =>
-      formatPlaylistDiagnostic({ parser: unsafe, scroll: unsafe }),
+      formatPlaylistDiagnostic({
+        parser: {
+          ...unsafe,
+          identifiedUnnamed: unsafe,
+          samples: [{ titleStructure: unsafe }],
+        },
+        scroll: unsafe,
+      }),
     ).not.toThrow();
     expect(
       parse(JSON.parse('{"__proto__":{"rounds":99},"constructor":"private"}'))

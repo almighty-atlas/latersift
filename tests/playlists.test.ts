@@ -12,6 +12,7 @@ function card(id = 'PL_one', name = 'Synthetic playlist', extra = '') {
 }
 function fixture(html = card()) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+
   let time = epoch;
   const env: PlaylistEnvironment = {
     doc,
@@ -31,6 +32,339 @@ function run(env: PlaylistEnvironment) {
 }
 
 describe('playlist catalog — synthetic DOM, not live-site validation', () => {
+  const lockup = (content: string) =>
+    `<ytd-rich-item-renderer><yt-lockup-view-model>${content}</yt-lockup-view-model></ytd-rich-item-renderer>`;
+  const unnamed = (id: string) =>
+    lockup(
+      `<a href="/playlist?list=${id}" aria-label="Thumbnail accessibility suffix"><img alt="Not a title"></a><a href="/watch?v=one&list=${id}">Video one</a><a href="/watch?v=two&list=${id}">Video two</a>`,
+    );
+
+  it('identifies 18 unnamed lockups after background growth 0 → 4 → 18 without claiming completeness', async () => {
+    const { env, doc } = fixture('');
+    let calls = 0;
+    env.advance = vi.fn(() => {
+      calls++;
+      if (calls === 1 || calls === 3)
+        doc.body.innerHTML = Array.from(
+          { length: calls === 1 ? 4 : 18 },
+          (_, i) => unnamed(`PL_${i}`),
+        ).join('');
+    });
+    const click = vi.spyOn(HTMLElement.prototype, 'click');
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    const result = await run(env);
+    expect(result.status).toBe('partial');
+    expect(result.entries).toHaveLength(18);
+    for (const entry of result.entries)
+      expect(entry).toMatchObject({
+        name: null,
+        nameStatus: 'unknown',
+        nameSource: 'unknown',
+        identityEvidence: 'playlist-url',
+        writability: 'unknown',
+        ownership: 'unknown',
+      });
+    expect(result.diagnostics).toMatchObject({
+      unsupportedCards: 0,
+      completenessVerified: false,
+      cardCount: { initial: 0, latest: 18, max: 18 },
+      parser: {
+        latest: { missing_title_node: 18 },
+        peaks: { missing_title_node: 18 },
+        identifiedUnnamed: { latest: 18, peak: 18 },
+        samplesTruncated: true,
+      },
+    });
+    expect(
+      result.diagnostics.cardCount?.changes.map(
+        ({ total, accepted, rejected }) => [total, accepted, rejected],
+      ),
+    ).toEqual([
+      [0, 0, 0],
+      [4, 4, 0],
+      [18, 18, 0],
+    ]);
+    expect(result.diagnostics.parser?.samples).toHaveLength(12);
+    for (const sample of result.diagnostics.parser!.samples)
+      expect(sample).toMatchObject({
+        reasons: ['missing_title_node'],
+        distinctValidIds: 1,
+        links: { playlist: 1, watch: 2 },
+        titleStructure: {
+          canonicalLinkCount: 1,
+          linkHeadings: 0,
+          metadataHeadings: 0,
+          ariaLabelledbyLinks: 0,
+          localHeadingReferences: 0,
+          missingOrAmbiguousReferences: 0,
+          watchLinkedHeadings: 0,
+          canonicalLinkHasAriaLabel: 1,
+        },
+      });
+    expect(click).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    click.mockRestore();
+    fetch.mockRestore();
+  });
+
+  it.each([
+    '<a href="/playlist?list=PL_one"><h2>Semantic name</h2></a>',
+    '<h1><a href="/playlist?list=PL_one">Semantic name</a></h1>',
+    '<div role="heading"><a href="/playlist?list=PL_one">Semantic name</a></div>',
+    '<a role="heading" href="/playlist?list=PL_one">Semantic name</a>',
+    '<h6><a href="/playlist?list=PL_one&feature=share">Semantic</a> <a href="/playlist?list=PL_one">name</a></h6>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="local-title">Thumbnail</a><h4 id="local-title">Semantic name</h4>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="local-title">Thumbnail</a><span id="local-title" class="yt-lockup-metadata-view-model__title">Semantic name</span>',
+  ])(
+    'confirms a synthetic semantic title relationship: %s',
+    async (content) => {
+      const { env } = fixture(lockup(content));
+      const result = await run(env);
+      expect(result.entries[0]).toMatchObject({
+        name: 'Semantic name',
+        nameStatus: 'confirmed',
+        nameSource: content.includes('aria-labelledby')
+          ? 'aria-labelledby'
+          : 'playlist-heading',
+        identityEvidence: 'playlist-url',
+        writability: 'unknown',
+      });
+      expect(result.diagnostics.parser?.identifiedUnnamed?.latest).toBe(0);
+    },
+  );
+
+  it.each([
+    '<h3><a href="/playlist?list=PL_one">Playlist name</a><a hidden href="/watch?v=one"> Watch title</a></h3>',
+    '<a href="/playlist?list=PL_one"><h3>Playlist name<span aria-hidden="true"> Watch title</span></h3></a>',
+    '<a href="/playlist?list=PL_one"><span id="playlist-title">Playlist name<span style="display:none"> Watch title</span></span></a>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="local-title">Thumbnail</a><h3 id="local-title">Playlist name<span hidden> Watch title</span></h3>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="local-title">Thumbnail</a><span class="yt-lockup-metadata-view-model__title" id="local-title">Playlist name<a hidden href="/watch?v=one"> Watch title</a></span>',
+    '<a role="heading" href="/playlist?list=PL_one">Playlist name<ytd-grid-playlist-renderer><h3> Other card metadata</h3></ytd-grid-playlist-renderer></a>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="local-title">Thumbnail</a><div role="heading" id="local-title">Playlist name<ytd-grid-playlist-renderer><span> Other card metadata</span><a href="/watch?v=one"> Watch title</a></ytd-grid-playlist-renderer></div>',
+  ])(
+    'extracts only visible same-card text from validated titles: %s',
+    async (content) => {
+      const { env, doc } = fixture(lockup(content));
+      // Exercise CSS visibility with a view; detached fixtures otherwise lack one.
+      Object.defineProperty(doc, 'defaultView', { value: window });
+      const result = await run(env);
+      expect(result.entries).toMatchObject([
+        {
+          id: 'PL_one',
+          name: 'Playlist name',
+          nameStatus: 'confirmed',
+          identityEvidence: 'playlist-url',
+        },
+      ]);
+      expect(result.diagnostics.parser?.latest.conflicting_titles).toBe(0);
+    },
+  );
+
+  it.each([
+    '<a href="/playlist?list=PL_one"><h3><span hidden>Hidden title</span></h3></a>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="local-title">Thumbnail</a><h3 id="local-title"><span hidden>Hidden title</span></h3>',
+    '<a href="/playlist?list=PL_one"><ytd-grid-playlist-renderer><h3>Other card metadata</h3><span id="playlist-title">Other legacy title</span></ytd-grid-playlist-renderer></a>',
+    '<a href="/playlist?list=PL_one" aria-labelledby="nested-title">Thumbnail<ytd-grid-playlist-renderer><h3 id="nested-title">Other card metadata</h3></ytd-grid-playlist-renderer></a>',
+    '<a href="/playlist?list=PL_one">Thumbnail</a><div role="heading"><ytd-grid-playlist-renderer><a href="/playlist?list=PL_one"></a>Other card metadata</ytd-grid-playlist-renderer></div>',
+  ])(
+    'preserves identity without adopting hidden or nested-card names: %s',
+    async (content) => {
+      const { env } = fixture(lockup(content));
+      const result = await run(env);
+      expect(result.entries).toMatchObject([
+        {
+          id: 'PL_one',
+          name: null,
+          nameStatus: 'unknown',
+          identityEvidence: 'playlist-url',
+        },
+      ]);
+      expect(result.diagnostics.cardCount?.changes[0].accepted).toBeGreaterThan(
+        0,
+      );
+    },
+  );
+
+  it('does not inherit an outer-card canonical anchor for a nested-card heading', async () => {
+    const { env } = fixture(
+      lockup(
+        '<a href="/playlist?list=PL_one"><ytd-grid-playlist-renderer><h3>Other card metadata</h3></ytd-grid-playlist-renderer></a>',
+      ),
+    );
+    // Construct the nesting through DOM methods: parsing nested anchors would repair it.
+    const nested = env.doc.querySelector('ytd-grid-playlist-renderer')!;
+    const nestedAnchor = env.doc.createElement('a');
+    nestedAnchor.href = '/playlist?list=PL_nested';
+    nested.append(nestedAnchor);
+    const result = await run(env);
+    expect(result.entries).toMatchObject([
+      { id: 'PL_nested', name: null, nameStatus: 'unknown' },
+    ]);
+    expect(result.diagnostics.parser?.latest.conflicting_playlist_ids).toBe(1);
+  });
+
+  it.each([
+    '<h3 class="yt-lockup-metadata-view-model__title">Unlinked CSS title</h3>',
+    '<a class="yt-lockup-metadata-view-model__title" href="/playlist?list=PL_one">CSS alone</a>',
+    '<h3><a href="/playlist?list=PL_one">Playlist</a><a href="/watch?v=one">Video</a></h3>',
+    '<h3><a href="/watch?v=one">Video</a></h3>',
+    '<span id="playlist-title">Unlinked legacy title</span>',
+    '<h3 hidden><a href="/playlist?list=PL_one">Hidden</a></h3>',
+    '<h2><a href="/playlist?list=PL_one">One</a></h2><h3><a href="/playlist?list=PL_one">Two</a></h3>',
+  ])(
+    'keeps proven identity with unknown or conflicting title: %s',
+    async (content) => {
+      const { env } = fixture(
+        lockup(
+          `<a href="/playlist?list=PL_one" title="Not title" aria-label="Not title">Thumbnail</a>${content}`,
+        ),
+      );
+      const result = await run(env);
+      expect(result.entries).toMatchObject([
+        { id: 'PL_one', name: null, nameStatus: 'unknown' },
+      ]);
+      expect(result.diagnostics.unsupportedCards).toBe(0);
+      expect(result.diagnostics.parser?.samples).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['missing', ''],
+    ['outside', '<h3 id="outside">Outside</h3>'],
+    ['duplicate', ''],
+    ['one two', ''],
+    ['shared', ''],
+    ['hidden', ''],
+    ['cross', lockup('<h3 id="cross">Other card</h3>')],
+    ['watch', ''],
+  ])(
+    'rejects unsafe labelledby reference %s without rejecting identity',
+    async (ref, outside) => {
+      const { env } = fixture(
+        `${outside}${lockup(`<a href="/playlist?list=PL_one" aria-labelledby="${ref}">Thumbnail</a><h3 id="duplicate">One</h3><h3 id="duplicate">Two</h3><h3 id="one">One</h3><h3 id="two">Two</h3><h3 id="shared">Shared</h3><a href="/watch?v=one" aria-labelledby="shared">Watch</a><h3 id="hidden" hidden>Hidden</h3><h3 id="watch"><a href="/watch?v=one">Video</a></h3>`)}`,
+      );
+      const result = await run(env);
+      expect(result.entries[0]).toMatchObject({
+        name: null,
+        nameStatus: 'unknown',
+      });
+      expect(
+        result.diagnostics.parser?.samples.find(
+          (sample) => sample.titleStructure?.ariaLabelledbyLinks === 1,
+        )?.titleStructure,
+      ).toMatchObject({
+        ariaLabelledbyLinks: 1,
+        localHeadingReferences: 0,
+        missingOrAmbiguousReferences: 1,
+      });
+    },
+  );
+
+  it('ignores hidden playlist links for identity and titles, but rejects visible ambiguous identity', async () => {
+    const { env } = fixture(
+      card(
+        'PL_one',
+        'Good',
+        '<a hidden href="/playlist?list=PL_other"><h2>Hidden</h2></a>',
+      ) +
+        lockup(
+          '<a hidden href="/playlist?list=PL_hidden">Hidden</a><h3><a href="/watch?v=one&list=PL_hidden">Video</a></h3>',
+        ) +
+        lockup(
+          '<a href="/playlist?list=PL_two">One</a><a href="/playlist?list=PL_three">Two</a>',
+        ),
+    );
+    const result = await run(env);
+    expect(result.entries).toMatchObject([{ id: 'PL_one', name: 'Good' }]);
+    expect(result.diagnostics.unsupportedCards).toBe(2);
+  });
+
+  it.each([false, true])(
+    'retains a confirmed name across unnamed duplicates in either order (%s)',
+    async (reverse) => {
+      const cards = [card('PL_one', 'Confirmed'), unnamed('PL_one')];
+      const { env } = fixture((reverse ? cards.reverse() : cards).join(''));
+      const result = await run(env);
+      expect(result.entries).toMatchObject([
+        {
+          name: 'Confirmed',
+          nameStatus: 'confirmed',
+          nameSource: 'legacy-title',
+        },
+      ]);
+      expect(result.diagnostics.parser?.latest.missing_title_node).toBe(1);
+    },
+  );
+
+  it('preserves a scan-confirmed name when later rounds contain only unnamed duplicates', async () => {
+    const { env, doc } = fixture(card('PL_one', 'Confirmed'));
+    env.advance = vi.fn(() => {
+      doc.body.innerHTML = unnamed('PL_one');
+    });
+    const result = await run(env);
+    expect(result.entries).toMatchObject([
+      {
+        name: 'Confirmed',
+        nameStatus: 'confirmed',
+        nameSource: 'legacy-title',
+      },
+    ]);
+    expect(result.diagnostics.parser?.identifiedUnnamed).toEqual({
+      latest: 1,
+      peak: 1,
+    });
+    expect(result.diagnostics.parser?.latest.missing_title_node).toBe(1);
+  });
+
+  it('retains confirmed evidence across rounds, but never resurrects conflicting names', async () => {
+    const { env, doc } = fixture(card('PL_one', 'One'));
+    let calls = 0;
+    const snapshots: PlaylistCatalog[] = [];
+    env.advance = vi.fn(() => {
+      calls++;
+      if (calls === 1) doc.body.innerHTML = unnamed('PL_one');
+      if (calls === 2) doc.body.innerHTML = card('PL_one', 'Two');
+      if (calls === 3)
+        doc.body.innerHTML = card('PL_one', 'One') + unnamed('PL_one');
+    });
+    const result = await scanPlaylists(
+      env,
+      new AbortController().signal,
+      (catalog) => {
+        snapshots.push(catalog);
+      },
+    );
+    expect(result.entries).toMatchObject([
+      { name: null, nameStatus: 'unknown', nameSource: 'conflicting' },
+    ]);
+    expect(snapshots[0].entries[0].name).toBe('One');
+    expect(result.diagnostics.parser?.latest.conflicting_titles).toBe(2);
+    expect(result.diagnostics.parser?.identifiedUnnamed?.latest).toBe(2);
+    // A new scan must not inherit names from a previous catalog.
+    doc.body.innerHTML = unnamed('PL_one');
+    expect((await run(env)).entries[0].name).toBeNull();
+  });
+
+  it.each([false, true])(
+    'merges conflicting same-ID duplicates conservatively in either order (%s)',
+    async (reverse) => {
+      const cards = [
+        card('PL_one', 'One'),
+        card('PL_one', 'Two'),
+        unnamed('PL_one'),
+      ];
+      const { env } = fixture((reverse ? cards.reverse() : cards).join(''));
+      const result = await run(env);
+      expect(result.entries).toMatchObject([
+        { id: 'PL_one', name: null, nameSource: 'conflicting' },
+      ]);
+      expect(result.diagnostics.parser?.latest.conflicting_titles).toBe(3);
+      expect(result.diagnostics.cardCount?.changes[0]).toMatchObject({
+        accepted: 3,
+        rejected: 0,
+      });
+    },
+  );
   it.each([
     card(),
     '<ytd-grid-playlist-renderer><a href="/playlist?list=PL_one" id="video-title">Synthetic playlist</a></ytd-grid-playlist-renderer>',
@@ -38,7 +372,7 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
   ])('reads a candidate card with separate title: %s', async (html) => {
     const { env } = fixture(html);
     const result = await run(env);
-    expect(result.entries).toEqual([
+    expect(result.entries).toMatchObject([
       {
         id: 'PL_one',
         name: 'Synthetic playlist',
@@ -95,19 +429,28 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
       <ytd-playlist-renderer><a href="/playlist?list=PL_two">Thumbnail</a><a href="/watch?v=abcdefghijk" id="video-title">Video title</a></ytd-playlist-renderer>
       <a href="/playlist?list=PL_three" id="playlist-title">Outside supported cards</a>
       <yt-lockup-view-model><a href="/playlist?list=PL_four" id="playlist-title">Outside rich item</a></yt-lockup-view-model>`);
-    expect((await run(env)).entries).toEqual([]);
+    expect((await run(env)).entries.map((entry) => entry.name)).toEqual([
+      null,
+      null,
+    ]);
   });
 
-  it('rejects conflicting titles and multi-playlist cards', async () => {
+  it('retains conflicting names as unknown but rejects multi-playlist cards', async () => {
     const { env } = fixture(
-      card('PL_one', 'One', '<span id="video-title">Another title</span>') +
+      card(
+        'PL_one',
+        'One',
+        '<a href="/playlist?list=PL_one" id="video-title">Another title</a>',
+      ) +
         card(
           'PL_two',
           'Two',
           '<a href="/playlist?list=PL_three">Other playlist</a>',
         ),
     );
-    expect((await run(env)).entries).toEqual([]);
+    expect((await run(env)).entries).toMatchObject([
+      { id: 'PL_one', name: null, nameSource: 'conflicting' },
+    ]);
   });
 
   it('never infers private visibility or ownership from names, prose or edit controls', async () => {
@@ -171,11 +514,13 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     expect((await run(env)).entries[0].visibility).toBe('unknown');
   });
 
-  it('rejects a lockup heading linking to a video rather than its playlist', async () => {
+  it('retains identity but ignores a lockup heading linking to a video', async () => {
     const { env } = fixture(
       '<ytd-rich-item-renderer><yt-lockup-view-model><a href="/playlist?list=PL_one">Thumbnail</a><h3 class="yt-lockup-metadata-view-model__title"><a href="/watch?v=abcdefghijk">Video title</a></h3></yt-lockup-view-model></ytd-rich-item-renderer>',
     );
-    expect((await run(env)).entries).toEqual([]);
+    expect((await run(env)).entries).toMatchObject([
+      { id: 'PL_one', name: null },
+    ]);
   });
 
   it('ignores hidden cards and hidden continuation markers', async () => {
@@ -383,7 +728,7 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     ['missing_title_node', '<a href="/playlist?list=PL_one">Thumbnail</a>'],
     [
       'conflicting_titles',
-      '<a href="/playlist?list=PL_one" id="playlist-title">One</a><span id="video-title">Two</span>',
+      '<a href="/playlist?list=PL_one" id="playlist-title">One</a><a href="/playlist?list=PL_one" id="video-title">Two</a>',
     ],
     [
       'ambiguous_title_link',
@@ -395,14 +740,21 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     ],
     ['hidden_card', '<div hidden><span id="playlist-title">Title</span></div>'],
   ] as const)(
-    'reports fixed rejection %s without polling inflation',
+    'reports fixed rejection or naming warning %s without polling inflation',
     async (reason, content) => {
       const { env } = fixture(
         `<ytd-playlist-renderer ${reason === 'hidden_card' ? 'hidden' : ''}>${content}</ytd-playlist-renderer>`,
       );
       const result = await run(env);
-      expect(result.status).toBe('failed');
-      expect(result.diagnostics.reason).toBe('unsupported_dom');
+      const rejected = [
+        'no_playlist_link',
+        'conflicting_playlist_ids',
+        'hidden_card',
+      ].includes(reason);
+      expect(result.status).toBe(rejected ? 'failed' : 'partial');
+      expect(result.diagnostics.unsupportedCards).toBe(
+        rejected && reason !== 'hidden_card' ? 1 : 0,
+      );
       expect(result.diagnostics.parser?.latest[reason]).toBe(1);
       expect(result.diagnostics.parser?.peaks[reason]).toBe(1);
       expect(result.diagnostics.parser?.samples[0].reasons).toContain(reason);
@@ -421,7 +773,7 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
       incomplete_rendering: 1,
       conflicting_playlist_ids: 0,
       conflicting_titles: 0,
-      ambiguous_title_link: 0,
+      ambiguous_title_link: 1,
       hidden_card: 0,
     });
     expect(result.diagnostics.parser?.samples[0].reasons).not.toContain(
@@ -429,7 +781,7 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     );
   });
 
-  it('explains four unsupported cards with non-scrollable geometry without blaming scrolling', async () => {
+  it('separates three unnamed identities from one unsupported card without blaming scrolling', async () => {
     const { env } = fixture(`
       <ytd-playlist-renderer><a href="/watch?v=video" id="playlist-title">Title</a></ytd-playlist-renderer>
       <ytd-playlist-renderer><a href="/playlist?list=PL_one">Thumbnail</a></ytd-playlist-renderer>
@@ -438,11 +790,11 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     env.scrollInfo = () => ({ top: 0, height: 1258, viewport: 1258 });
     const result = await run(env);
     expect(result).toMatchObject({
-      status: 'failed',
+      status: 'partial',
       diagnostics: {
-        reason: 'unsupported_dom',
-        rounds: 6,
-        unsupportedCards: 4,
+        reason: 'stable_unverified_end',
+        rounds: 7,
+        unsupportedCards: 1,
         scrollAvailability: 'not_scrollable',
         continuationSeen: false,
         cardCount: { initial: 4, latest: 4, max: 4 },
@@ -458,7 +810,7 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     expect(
       result.diagnostics.parser?.samples.map((sample) => sample.reasons),
     ).toEqual([
-      ['no_playlist_link'],
+      ['no_playlist_link', 'ambiguous_title_link'],
       ['missing_title_node'],
       ['incomplete_rendering'],
       ['ambiguous_title_link'],
@@ -581,7 +933,7 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
       <a href="/other/${secret}"></a><a href="javascript:${secret}"></a><a data-secret="${secret}"></a>
       <h3 class="yt-lockup-metadata-view-model__title">${secret}</h3><span id="video-title">Different title</span>
     </ytd-playlist-renderer>`;
-    // The second, conflicting valid title makes every sample a rejected card.
+    // Naming warnings on identified cards must also remain inspectable.
     const { env, doc } = fixture(html.repeat(14));
     let calls = 0;
     env.advance = vi.fn(() => {
@@ -720,6 +1072,66 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
       'PRIVATE_SENTINEL',
     );
     expect(JSON.stringify(result.diagnostics)).not.toContain('secret.example');
+  });
+
+  it.each(['hidden', 'aria-hidden="true"'])(
+    'excludes %s descendant watch text from a confirmed playlist heading',
+    async (attribute) => {
+      const { env } = fixture(`<ytd-rich-item-renderer><yt-lockup-view-model>
+        <h3><a href="/playlist?list=PL_one">Playlist name</a><a ${attribute} href="/watch?v=one"> HIDDEN_WATCH_TITLE</a></h3>
+      </yt-lockup-view-model></ytd-rich-item-renderer>`);
+      const result = await run(env);
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toMatchObject({
+        id: 'PL_one',
+        name: 'Playlist name',
+        nameStatus: 'confirmed',
+      });
+    },
+  );
+
+  it.each(['hidden', 'aria-hidden="true"'])(
+    'excludes %s descendant text from a local accessibility title reference',
+    async (attribute) => {
+      const { env } = fixture(`<ytd-rich-item-renderer><yt-lockup-view-model>
+        <a href="/playlist?list=PL_one" aria-labelledby="local-heading"><img alt="Never a title"></a>
+        <h3 id="local-heading">Playlist name<a ${attribute} href="/watch?v=one"> HIDDEN_WATCH_TITLE</a></h3>
+      </yt-lockup-view-model></ytd-rich-item-renderer>`);
+      const result = await run(env);
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toMatchObject({
+        id: 'PL_one',
+        name: 'Playlist name',
+        nameStatus: 'confirmed',
+        nameSource: 'aria-labelledby',
+      });
+    },
+  );
+
+  it('does not inherit a playlist anchor across a nested-card boundary', async () => {
+    const { env } = fixture(`<ytd-playlist-renderer>
+      <a href="/playlist?list=PL_one"><ytd-grid-playlist-renderer><h3>OTHER_CARD_TITLE</h3></ytd-grid-playlist-renderer></a>
+    </ytd-playlist-renderer>`);
+    const result = await run(env);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 'PL_one',
+      name: null,
+      nameStatus: 'unknown',
+    });
+  });
+
+  it('excludes nested-card text from an otherwise valid playlist heading', async () => {
+    const { env } = fixture(`<ytd-playlist-renderer>
+      <h3><a href="/playlist?list=PL_one">Playlist name</a><ytd-grid-playlist-renderer><span> OTHER_CARD_TITLE</span></ytd-grid-playlist-renderer></h3>
+    </ytd-playlist-renderer>`);
+    const result = await run(env);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 'PL_one',
+      name: 'Playlist name',
+      nameStatus: 'confirmed',
+    });
   });
 
   it('checkpoints detached snapshots and does not click or mutate the document', async () => {

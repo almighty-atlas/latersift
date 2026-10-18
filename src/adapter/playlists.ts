@@ -1,6 +1,16 @@
 export interface PlaylistEntry {
   id: string;
-  name: string;
+  name: string | null;
+  /** Optional for stored legacy entries; every newly scanned entry sets these. */
+  nameStatus?: 'confirmed' | 'unknown';
+  nameSource?:
+    | 'playlist-heading'
+    | 'aria-labelledby'
+    | 'legacy-title'
+    | 'unknown'
+    | 'conflicting';
+  identityEvidence?: 'playlist-url';
+  writability?: 'unknown';
   url: string;
   visibility: 'private' | 'public' | 'unlisted' | 'unknown';
   ownership: 'owned' | 'unknown';
@@ -13,6 +23,7 @@ export interface PlaylistScrollInfo {
   viewport: number;
 }
 
+/** Legacy key name: title-related reasons are warnings, not identity rejections. */
 export type PlaylistRejectionReason =
   | 'no_playlist_link'
   | 'conflicting_playlist_ids'
@@ -59,6 +70,21 @@ export interface PlaylistCardSample {
   childTags: Partial<Record<PlaylistDiagnosticTag, number>>;
   links: Record<PlaylistLinkType, number>;
   distinctValidIds: number;
+  /** Visible, same-card structure only; contains no DOM text or attribute values. */
+  titleStructure?: PlaylistTitleStructure;
+}
+
+export interface PlaylistTitleStructure {
+  canonicalLinkCount: number;
+  linkHeadings: number;
+  /** Visible headings without an exclusive canonical-link relationship. */
+  metadataHeadings: number;
+  ariaLabelledbyLinks: number;
+  /** Valid single local heading or dedicated-title references. */
+  localHeadingReferences: number;
+  missingOrAmbiguousReferences: number;
+  watchLinkedHeadings: number;
+  canonicalLinkHasAriaLabel: number;
 }
 
 export interface PlaylistCardCounts {
@@ -70,10 +96,13 @@ export interface PlaylistCardCounts {
 }
 
 export interface PlaylistParserDiagnostics {
-  /** Each rejected card contributes at most once per reason in the latest round. */
+  /** Per-card counts in the latest round, including naming warnings on accepted identities. */
   latest: PlaylistReasonCounts;
   peaks: PlaylistReasonCounts;
-  /** First 12 rejected cards in the latest round; never accumulated by polling. */
+  /** Identified cards with no card-local name (including conflicts), before name retention;
+   * latest round and maximum, not polling sums or unique catalog-entry counts. */
+  identifiedUnnamed?: { latest: number; peak: number };
+  /** First 12 rejected or naming-warning cards in the latest round. */
   samples: PlaylistCardSample[];
   samplesTruncated: boolean;
   sources: Partial<Record<PlaylistDiagnosticTag, number>>;
@@ -192,9 +221,136 @@ function hidden(element: Element): boolean {
   return false;
 }
 
-type CardResult =
-  | { entry: PlaylistEntry; reasons: [] }
-  | { entry: null; reasons: PlaylistRejectionReason[] };
+type CardResult = {
+  entry: PlaylistEntry | null;
+  reasons: PlaylistRejectionReason[];
+};
+
+const HEADING = 'h1, h2, h3, h4, h5, h6, [role="heading"]';
+
+function titleEvidence(card: Element, canonical?: string) {
+  const sameCard = (node: Element) => node.closest(CARDS) === card;
+  const visible = (selector: string) =>
+    [...card.querySelectorAll(selector)].filter(
+      (node) => sameCard(node) && !hidden(node),
+    );
+  // textContent also includes hidden and nested-card content. Neither is title evidence.
+  const visibleText = (node: Node): string => {
+    if (node.nodeType === 3) return node.textContent ?? '';
+    if (node.nodeType !== 1) return '';
+    const element = node as Element;
+    if (!sameCard(element) || hidden(element)) return '';
+    return [...element.childNodes].map(visibleText).join('');
+  };
+  const anchors = visible('a[href]');
+  const canonicalLinks = anchors.filter(
+    (node) =>
+      !!canonical &&
+      playlistURL(node.getAttribute('href')!)?.href === canonical,
+  );
+  const headings = visible(HEADING);
+  const structure: PlaylistTitleStructure = {
+    canonicalLinkCount: canonicalLinks.length,
+    linkHeadings: 0,
+    metadataHeadings: 0,
+    ariaLabelledbyLinks: 0,
+    localHeadingReferences: 0,
+    missingOrAmbiguousReferences: 0,
+    watchLinkedHeadings: 0,
+    canonicalLinkHasAriaLabel: canonicalLinks.filter((node) =>
+      node.hasAttribute('aria-label'),
+    ).length,
+  };
+  const names = new Map<string, NonNullable<PlaylistEntry['nameSource']>>();
+  let ambiguous = false;
+  let empty = false;
+  const linked = (node: Element) => {
+    const parent = node.closest('a[href]');
+    const links = [
+      ...(parent ? [parent] : []),
+      ...node.querySelectorAll('a[href]'),
+    ].filter((link) => sameCard(link) && !hidden(link));
+    return (
+      !!canonical &&
+      links.length > 0 &&
+      links.every(
+        (link) => playlistURL(link.getAttribute('href')!)?.href === canonical,
+      )
+    );
+  };
+  const add = (
+    node: Element,
+    source: NonNullable<PlaylistEntry['nameSource']>,
+  ) => {
+    const name = visibleText(node).replace(/\s+/g, ' ').trim();
+    if (name) names.set(name, names.get(name) ?? source);
+    else empty = true;
+  };
+  for (const heading of headings) {
+    const parent = heading.closest('a[href]');
+    const links = [
+      ...(parent ? [parent] : []),
+      ...heading.querySelectorAll('a[href]'),
+    ].filter((link) => sameCard(link) && !hidden(link));
+    if (links.some((link) => linkType(link.getAttribute('href')) === 'watch'))
+      structure.watchLinkedHeadings++;
+    if (linked(heading)) {
+      structure.linkHeadings++;
+      add(heading, 'playlist-heading');
+    } else {
+      structure.metadataHeadings++;
+      if (links.length) ambiguous = true;
+    }
+  }
+  for (const title of visible(TITLE)) {
+    if (!visibleText(title).trim()) empty = true;
+    // Dynamic lockup classes alone never establish a title relationship.
+    if (!title.matches('[id="playlist-title"], [id="video-title"]')) continue;
+    if (linked(title)) add(title, 'legacy-title');
+    else ambiguous = true;
+  }
+  for (const anchor of canonicalLinks) {
+    if (!anchor.hasAttribute('aria-labelledby')) continue;
+    structure.ariaLabelledbyLinks++;
+    const refs = anchor.getAttribute('aria-labelledby')!.trim().split(/\s+/);
+    const matches =
+      refs.length === 1 && refs[0]
+        ? [...card.ownerDocument.querySelectorAll('[id]')].filter(
+            (node) => node.id === refs[0],
+          )
+        : [];
+    const target = matches.length === 1 ? matches[0] : null;
+    const shared = anchors.some(
+      (other) =>
+        other !== anchor &&
+        other
+          .getAttribute('aria-labelledby')
+          ?.trim()
+          .split(/\s+/)
+          .includes(refs[0]),
+    );
+    if (
+      !target ||
+      !card.contains(target) ||
+      target.closest(CARDS) !== card ||
+      hidden(target) ||
+      !target.matches(`${HEADING}, ${TITLE}`) ||
+      shared ||
+      ([...target.querySelectorAll('a[href]')].some(
+        (link) => sameCard(link) && !hidden(link),
+      ) &&
+        !linked(target)) ||
+      (target.closest('a[href]') && target.closest('a[href]') !== anchor)
+    ) {
+      structure.missingOrAmbiguousReferences++;
+      ambiguous = true;
+      continue;
+    }
+    structure.localHeadingReferences++;
+    add(target, 'aria-labelledby');
+  }
+  return { names, structure, ambiguous, empty };
+}
 
 function parseCard(card: Element): CardResult {
   if (hidden(card)) return { entry: null, reasons: ['hidden_card'] };
@@ -211,41 +367,16 @@ function parseCard(card: Element): CardResult {
   if (urls.size === 0) reasons.push('no_playlist_link');
   if (urls.size > 1) reasons.push('conflicting_playlist_ids');
   const url = [...urls.values()][0];
-  const names = new Set<string>();
-  const titles = [...card.querySelectorAll(TITLE)].filter(
-    (node) => !hidden(node),
-  );
-  if (titles.length === 0) reasons.push('missing_title_node');
-  let ambiguous = false;
-  let emptyTitle = false;
-  for (const title of titles) {
-    if (!(title.textContent || '').trim()) emptyTitle = true;
-    if (hidden(title)) continue;
-    const anchor = title.closest('a[href]');
-    const titleLinks = [
-      ...(anchor ? [anchor] : []),
-      ...title.querySelectorAll('a[href]'),
-    ];
-    if (
-      titleLinks.some(
-        (link) => playlistURL(link.getAttribute('href')!)?.href !== url?.href,
-      )
-    ) {
-      ambiguous = true;
-      continue;
-    }
-    // A dedicated title node is required; thumbnail labels and card text are not titles.
-    const name = (title.textContent || '').replace(/\s+/g, ' ').trim();
-    if (name) names.add(name);
-  }
-  // Acceptance remains identical: one visible canonical URL and one usable title.
-  if (urls.size !== 1 || names.size !== 1) {
-    if (names.size > 1) reasons.push('conflicting_titles');
+  const { names, ambiguous, empty } = titleEvidence(card, url?.href);
+  if (names.size > 1) reasons.push('conflicting_titles');
+  if (names.size === 0) {
     if (ambiguous) reasons.push('ambiguous_title_link');
-    // Only directly observed empty nodes/links, not a guessed loading cause.
-    if (emptyTitle || emptyLink) reasons.push('incomplete_rendering');
-    return { entry: null, reasons };
+    else if (!empty) reasons.push('missing_title_node');
+    if (empty || emptyLink) reasons.push('incomplete_rendering');
   }
+  // A missing/ambiguous name cannot invalidate an otherwise proven identity.
+  if (urls.size !== 1) return { entry: null, reasons };
+  const name = names.size === 1 ? [...names.keys()][0] : null;
   const visibility = new Set<PlaylistEntry['visibility']>();
   // Only explicit structured privacy badges, never title/description/aria prose.
   for (const badge of card.querySelectorAll('ytd-badge-supported-renderer')) {
@@ -266,13 +397,22 @@ function parseCard(card: Element): CardResult {
   return {
     entry: {
       id: url.searchParams.get('list')!,
-      name: [...names][0],
+      name,
+      nameStatus: name === null ? 'unknown' : 'confirmed',
+      nameSource:
+        name === null
+          ? names.size > 1
+            ? 'conflicting'
+            : 'unknown'
+          : names.get(name)!,
+      identityEvidence: 'playlist-url',
+      writability: 'unknown',
       url: url.href,
       visibility: visibility.size === 1 ? [...visibility][0] : 'unknown',
       // Feed membership, private visibility and edit controls do not prove ownership.
       ownership: 'unknown',
     },
-    reasons: [],
+    reasons,
   };
 }
 
@@ -357,6 +497,13 @@ function cardSample(
     childTags,
     links,
     distinctValidIds: ids.size,
+    titleStructure: titleEvidence(
+      card,
+      [...card.querySelectorAll('a[href]')]
+        .filter((node) => !hidden(node))
+        .map((node) => playlistURL(node.getAttribute('href')!))
+        .find((url) => url)?.href,
+    ).structure,
     titleNodes: {
       playlistTitle: card.querySelectorAll('[id="playlist-title"]').length,
       videoTitle: card.querySelectorAll('[id="video-title"]').length,
@@ -376,6 +523,9 @@ export async function scanPlaylists(
   const clock = env.now ?? Date.now;
   const started = clock();
   const entries = new Map<string, PlaylistEntry>();
+  // Evidence belongs exclusively to this scan, including virtualized prior rounds.
+  const nameEvidence = new Map<string, Set<string>>();
+  const nameConflicts = new Set<string>();
   const catalog: PlaylistCatalog = {
     entries: [],
     status: 'running',
@@ -399,6 +549,7 @@ export async function scanPlaylists(
         samples: [],
         samplesTruncated: false,
         sources: {},
+        identifiedUnnamed: { latest: 0, peak: 0 },
       },
       cardCount: { initial: 0, latest: 0, max: 0, changes: [] },
       loadingEvidence: {
@@ -461,26 +612,62 @@ export async function scanPlaylists(
       parser.samples = [];
       parser.sources = {};
       const cards = [...env.doc.querySelectorAll(CARDS)];
+      const results = cards.map((card) => parseCard(card));
+      for (const { entry, reasons } of results) {
+        if (!entry) continue;
+        const names = nameEvidence.get(entry.url) ?? new Set<string>();
+        if (entry.name !== null) names.add(entry.name);
+        nameEvidence.set(entry.url, names);
+        if (names.size > 1 || reasons.includes('conflicting_titles'))
+          nameConflicts.add(entry.url);
+      }
+      let sampledCards = 0;
+      parser.identifiedUnnamed!.latest = 0;
       for (const [index, card] of cards.entries()) {
         const source = safeTag(card);
         parser.sources[source] = (parser.sources[source] ?? 0) + 1;
-        const { entry, reasons } = parseCard(card);
+        const { entry, reasons } = results[index];
+        if (entry && nameConflicts.has(entry.url)) {
+          entry.name = null;
+          entry.nameStatus = 'unknown';
+          entry.nameSource = 'conflicting';
+          if (!reasons.includes('conflicting_titles'))
+            reasons.push('conflicting_titles');
+        }
+        for (const reason of reasons) parser.latest[reason]++;
+        if (!entry || reasons.length) {
+          sampledCards++;
+          if (parser.samples.length < 12)
+            parser.samples.push(cardSample(card, index, reasons));
+        }
+        if (entry?.name === null) parser.identifiedUnnamed!.latest++;
         if (!entry) {
           if (reasons.includes('hidden_card')) hiddenCards++;
           else unsupported++;
-          for (const reason of reasons) parser.latest[reason]++;
-          if (parser.samples.length < 12)
-            parser.samples.push(cardSample(card, index, reasons));
+
           continue;
         }
         accepted++;
         const previous = entries.get(entry.url);
+        if (
+          entry.name === null &&
+          previous?.name &&
+          !nameConflicts.has(entry.url)
+        ) {
+          entry.name = previous.name;
+          entry.nameStatus = previous.nameStatus;
+          entry.nameSource = previous.nameSource;
+        }
         if (!previous || JSON.stringify(previous) !== JSON.stringify(entry)) {
           entries.set(entry.url, entry);
           progress = true;
         }
       }
-      parser.samplesTruncated = cards.length - accepted > parser.samples.length;
+      parser.samplesTruncated = sampledCards > parser.samples.length;
+      parser.identifiedUnnamed!.peak = Math.max(
+        parser.identifiedUnnamed!.peak,
+        parser.identifiedUnnamed!.latest,
+      );
       for (const reason of Object.keys(
         parser.latest,
       ) as PlaylistRejectionReason[]) {
