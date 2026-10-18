@@ -39,6 +39,187 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
       `<a href="/playlist?list=${id}" aria-label="Thumbnail accessibility suffix"><img alt="Not a title"></a><a href="/watch?v=one&list=${id}">Video one</a><a href="/watch?v=two&list=${id}">Video two</a>`,
     );
 
+  it.each([
+    ['matching', '&list=PL_one', 1, 0, 0, 0],
+    ['missing', '', 0, 1, 0, 1],
+    ['different', '&list=PL_other', 0, 0, 1, 1],
+    ['case-sensitive', '&list=PL_One', 0, 0, 1, 1],
+    ['prefix', '&list=PL_one_more', 0, 0, 1, 1],
+    ['empty', '&list=', 0, 0, 1, 1],
+    ['duplicate identical', '&list=PL_one&list=PL_one', 0, 0, 1, 1],
+    ['duplicate conflicting', '&list=PL_one&list=PL_other', 0, 0, 1, 1],
+  ])(
+    'diagnoses %s watch list parameters without confirming video text',
+    async (_, query, matching, missing, conflicting, ambiguous) => {
+      const { env } = fixture(
+        lockup(
+          `<a href="/playlist?list=PL_one"><img alt="Thumbnail"></a>
+       <yt-lockup-metadata-view-model><h3><a href="/watch?v=video${query}">Single video title</a></h3></yt-lockup-metadata-view-model>`,
+        ),
+      );
+      const result = await run(env);
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toMatchObject({
+        id: 'PL_one',
+        name: null,
+        nameStatus: 'unknown',
+        nameSource: 'unknown',
+        ownership: 'unknown',
+        writability: 'unknown',
+      });
+      expect(
+        result.diagnostics.parser?.samples[0]?.titleStructure,
+      ).toMatchObject({
+        watchLinksMatchingPlaylist: matching,
+        watchLinksMissingPlaylist: missing,
+        watchLinksConflictingPlaylist: conflicting,
+        watchLinksUnresolvedPlaylist: 0,
+        headingsWithMatchingWatchPlaylist: matching,
+        ambiguousHeadings: ambiguous,
+        watchHeadingContainsLink: 1,
+        watchLinkContainsHeading: 0,
+        watchHeadingsInLockupMetadata: 1,
+        watchHeadingsWithCanonicalLinkInMetadata: 0,
+        watchHeadingsWithCanonicalLinkOutsideMetadata: 1,
+      });
+    },
+  );
+
+  it('describes a watch link enclosing a heading and a shared metadata boundary, not a confirmed name', async () => {
+    const { env } = fixture(
+      lockup(`<yt-lockup-metadata-view-model>
+      <a href="/watch?v=video&list=PL_one"><h3>Video title</h3></a>
+      <a href="/playlist?list=PL_one">View playlist</a>
+      </yt-lockup-metadata-view-model>`),
+    );
+    const result = await run(env);
+    expect(result.entries[0]?.name).toBeNull();
+    expect(result.diagnostics.parser?.samples[0]?.titleStructure).toMatchObject(
+      {
+        watchLinksMatchingPlaylist: 1,
+        watchHeadingContainsLink: 0,
+        watchLinkContainsHeading: 1,
+        watchHeadingsInLockupMetadata: 1,
+        watchHeadingsWithCanonicalLinkInMetadata: 1,
+        watchHeadingsWithCanonicalLinkOutsideMetadata: 0,
+      },
+    );
+  });
+
+  it.each([
+    '<a href="/watch?v=a&list=PL_one">One</a><a href="/watch?v=b&list=PL_one">Two</a>',
+    '<a href="/watch?v=a&list=PL_one">One</a><a href="/watch?v=b&list=PL_other">Two</a>',
+    '<a href="/watch?v=a&list=PL_one">One</a><a href="/playlist?list=PL_one">Playlist</a>',
+  ])('counts a heading with multiple links as ambiguous: %s', async (links) => {
+    const { env } = fixture(
+      lockup(`<a href="/playlist?list=PL_one"></a><h3>${links}</h3>`),
+    );
+    const result = await run(env);
+    expect(result.entries[0]?.name).toBeNull();
+    expect(result.diagnostics.parser?.samples[0]?.titleStructure).toMatchObject(
+      {
+        headingsWithMatchingWatchPlaylist: 1,
+        ambiguousHeadings: 1,
+      },
+    );
+  });
+
+  it('counts multiple same-text watch headings as ambiguous, not one unique name', async () => {
+    const { env } = fixture(
+      lockup(`<a href="/playlist?list=PL_one"></a>
+      <h3><a href="/watch?v=a&list=PL_one">Same text</a></h3>
+      <h3><a href="/watch?v=b&list=PL_one">Same text</a></h3>`),
+    );
+    const result = await run(env);
+    expect(result.entries[0]?.name).toBeNull();
+    expect(result.diagnostics.parser?.samples[0]?.titleStructure).toMatchObject(
+      {
+        headingsWithMatchingWatchPlaylist: 2,
+        ambiguousHeadings: 2,
+      },
+    );
+  });
+
+  it.each([
+    'hidden',
+    'aria-hidden="true"',
+    'style="display:none"',
+    'style="visibility:hidden"',
+  ])('excludes %s watch headings and links', async (attribute) => {
+    const { env, doc } = fixture(
+      lockup(`<a href="/playlist?list=PL_one"></a>
+      <yt-lockup-metadata-view-model ${attribute}><h3><a href="/watch?v=a&list=PL_one">Hidden</a></h3></yt-lockup-metadata-view-model>`),
+    );
+    Object.defineProperty(doc, 'defaultView', { value: window });
+    const result = await run(env);
+    expect(result.entries[0]?.name).toBeNull();
+    expect(result.diagnostics.parser?.samples[0]?.titleStructure).toMatchObject(
+      {
+        watchLinksMatchingPlaylist: 0,
+        watchLinkedHeadings: 0,
+        headingsWithMatchingWatchPlaylist: 0,
+        ambiguousHeadings: 0,
+        watchHeadingsInLockupMetadata: 0,
+      },
+    );
+  });
+
+  it('excludes nested-card watch headings even when the playlist ID matches', async () => {
+    const { env } = fixture(
+      lockup(`<a href="/playlist?list=PL_one"></a>
+      <ytd-playlist-renderer><a href="/playlist?list=PL_one"></a>
+      <yt-lockup-metadata-view-model><h3><a href="/watch?v=a&list=PL_one">Nested video</a></h3></yt-lockup-metadata-view-model>
+      </ytd-playlist-renderer>`),
+    );
+    const result = await run(env);
+    expect(result.entries[0]?.name).toBeNull();
+    const samples = result.diagnostics.parser!.samples;
+    expect(samples[0]?.titleStructure).toMatchObject({
+      watchLinksMatchingPlaylist: 0,
+      watchLinkedHeadings: 0,
+    });
+    expect(samples[1]?.titleStructure).toMatchObject({
+      watchLinksMatchingPlaylist: 1,
+      watchLinkedHeadings: 1,
+    });
+  });
+
+  it('does not compare watch IDs to an arbitrary first canonical playlist in conflicting cards', async () => {
+    const { env } = fixture(
+      lockup(`<a href="/playlist?list=PL_one"></a><a href="/playlist?list=PL_two"></a>
+      <h3><a href="/watch?v=a&list=PL_one">Video</a></h3>`),
+    );
+    const result = await run(env);
+    expect(result.entries).toEqual([]);
+    expect(result.diagnostics.parser?.samples[0]?.titleStructure).toMatchObject(
+      {
+        canonicalLinkCount: 0,
+        watchLinksMatchingPlaylist: 0,
+        watchLinksUnresolvedPlaylist: 1,
+        ambiguousHeadings: 1,
+      },
+    );
+  });
+
+  it('keeps equal watch titles on different playlist identities unnamed and separate', async () => {
+    const { env } = fixture(
+      ['PL_one', 'PL_two']
+        .map((id) =>
+          lockup(
+            `<a href="/playlist?list=${id}"></a><h3><a href="/watch?v=a&list=${id}">Same text</a></h3>`,
+          ),
+        )
+        .join(''),
+    );
+    const result = await run(env);
+    expect(result.entries.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: 'PL_one', name: null },
+      { id: 'PL_two', name: null },
+    ]);
+    for (const sample of result.diagnostics.parser!.samples)
+      expect(sample.titleStructure?.watchLinksMatchingPlaylist).toBe(1);
+  });
+
   it('identifies 18 unnamed lockups after background growth 0 → 4 → 18 without claiming completeness', async () => {
     const { env, doc } = fixture('');
     let calls = 0;

@@ -1,6 +1,26 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.6 – Playlist-Identität unabhängig vom Namen
+## Aktuell: 0.2.7 – gezielte Lockup-Strukturdiagnose
+
+- **Nutzergemeldeter Live-Befund mit 0.2.6:** 18 akzeptierte `yt-lockup-view-model`-Karten ohne Namen. Die Aufnahme namenloser Identitäten ist für diesen Lauf belegt; Namensauflösung und Feed-Vollständigkeit sind damit nicht bestätigt. **Watch list bleibt unbewiesen**, daher kein neuer `playlist-watch-heading`-Parser und keine neue Namensquelle.
+- **Implementierte `titleStructure`-Felder:** `watchLinksMatchingPlaylist`, `watchLinksMissingPlaylist`, `watchLinksConflictingPlaylist`, `watchLinksUnresolvedPlaylist`, `headingsWithMatchingWatchPlaylist`, `ambiguousHeadings`, `watchHeadingContainsLink`, `watchLinkContainsHeading`, `watchHeadingsInLockupMetadata`, `watchHeadingsWithCanonicalLinkInMetadata`, `watchHeadingsWithCanonicalLinkOutsideMetadata`. [Feldbedeutung und Diagnosegrenzen](PLAYLIST-FEED-DIAGNOSTICS.md#titlestructure-diagnosefelder).
+- **Sichtbar / same-card:** nur sichtbare Elemente derselben nächsten Karte, keine verborgenen Nachfahren oder verschachtelten Karteninhalte. Metadata ausschließlich über das feste Element `yt-lockup-metadata-view-model`, niemals über dynamische Klassen. Mehrere Linkziele, mehrere Watch-Links, fehlender exakter Playlist-Match oder mehrere Watch-Überschriften gelten als Ambiguität. Ein positiver Match-Zähler hebt diese nicht auf.
+- **Keine Namensbestätigung durch Zähler:** Enthaltensein, Metadatenlage und passende Playlist-Bezüge sind Strukturbeobachtungen, keine Freigabe für `nameStatus: confirmed`. Berichte enthalten keine Namen, tatsächlichen IDs, URLs, Attributwerte, HTML oder Roh-DOM.
+- **Umfang dieses Schritts:** Diagnose in Adapter und bereinigtem Formatter, synthetische Regressionstests, Versionierung auf 0.2.7 und Test-XPI. Identitäts-/Namensvertrag, UI-Namenskennzeichnung, Rechte, Schreibgates, Fokusverhalten und Vollständigkeitsprüfung bleiben unverändert. Kein optionaler lokaler Anzeigename implementiert.
+- **Validierungsgrenze:** keine eigene angemeldete Live-Validierung und keine Live-Abnahme von 0.2.7. Historische Qualitätsergebnisse unten gelten nur für die jeweilige Version. Nach lokaler Prüfung folgt ein gesonderter rein lesender Nutzerlauf mit bereinigter Diagnose; keine echten Schreibtests.
+
+### Qualitätsergebnisse 0.2.7
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **910/910 in 20 Dateien**, darunter **129 Playlist-Parser-/Scannerfälle** und **89 Diagnose-/Datenschutzfälle**. 20 neue Regressionen prüfen exakte, fehlende, leere, abweichende und mehrfach vorhandene Watch-`list`-Parameter, einzelne Videotitel, mehrere Links/Überschriften, versteckte und verschachtelte Karten sowie gleiche Texte verschiedener Identitäten. Auch ein exakter Watch-Match bestätigt keinen Namen.
+- `pnpm test:ui`: **92/92 in Chromium und Firefox**. Neue Strukturzähler passieren Anzeige und Kopie; private Werte in neuen Feldern werden bereinigt. Bestehende bestätigte/unbekannte Namensanzeige, Persistenz und lokale Zielwahl bleiben geprüft.
+- `pnpm package`: Produktionsbuild und `artifacts/latersift-0.2.7-unsigned.xpi` erfolgreich; `pnpm lint:extension`: **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- `node scripts/test-firefox.mjs` für `dist` und mit `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.7-unsigned.xpi`: echtes MV3-Add-on in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
+- SHA-256 der lokal getesteten XPI: `4c1a0254e01345b598b6e15f08ef29dc68665eccb6358f278c18bf723f8c2630`.
+
+Die zunächst fehlende CSS-View in zwei neuen synthetischen Fixtures sowie veraltete UI-Erwartungen an die Diagnosefeldliste wurden korrigiert; die vollständigen Läufe oben sind danach erfolgreich. Keine angemeldete Live-Abnahme, Signierung oder AMO-Veröffentlichung. PR #2 bleibt offen; kein Merge.
+
+## Historischer Stand: 0.2.6 – Playlist-Identität unabhängig vom Namen
 
 Basis: **0.2.5**, Stand: 18.10.2026. [Aktueller Identitäts-/Namensvertrag, Diagnose, Datenschutz und nächster Zen-Test](PLAYLIST-IDENTITY.md).
 
@@ -20,13 +40,13 @@ Basis: **0.2.5**, Stand: 18.10.2026. [Aktueller Identitäts-/Namensvertrag, Diag
 - `pnpm test:firefox-extension` und `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.6-unsigned.xpi node scripts/test-firefox.mjs`: echtes MV3-Add-on aus `dist` und finaler XPI in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
 - SHA-256 der lokal getesteten XPI: `8b8e3d072e3c0c6ca1bcac6e1cecc1950b4070c5e3a490e5fed811a01c44d12e`.
 
-Synthetische Fixtures und Add-on-Installation ersetzen keine angemeldete Live-Abnahme. Der Nutzerbefund bestätigt den alten Titelblocker und vorhandene Playlist-Links; die Aufnahme und Namensauflösung durch 0.2.6 sind noch nicht im angemeldeten Zen bestätigt. Keine Signierung/AMO-Veröffentlichung.
+Synthetische Fixtures und Add-on-Installation ersetzen keine angemeldete Live-Abnahme. Zum damaligen Freigabestand bestätigte der Nutzerbefund den alten Titelblocker und vorhandene Playlist-Links; die Aufnahme und Namensauflösung durch 0.2.6 waren noch nicht im angemeldeten Zen bestätigt. Der neuere, oben dokumentierte 0.2.6-Nutzerlauf belegt inzwischen 18 akzeptierte Lockups ohne Namen, weiterhin keine Namensauflösung. Keine Signierung/AMO-Veröffentlichung.
 
-**Nächster Schritt:** im angemeldeten Zen mit 0.2.6 genau einmal „Playlists aktualisieren“ im inaktiven Arbeitstab. Bei derselben DOM-Lage mit 18 eindeutigen gültigen sichtbaren Playlist-URLs sind 18 akzeptierte Einträge zu erwarten, auch bei ausschließlich unbekannten Namen. Das ist kein festgelegter heutiger Zähler, keine Vollständigkeits- oder Namensgarantie. Nur Arbeitstab-Diagnose und bereinigtes Playlist-Diagnose-JSON zurückmelden; keine URLs, Namen, persönlichen Screenshots oder privaten Backups. [Genaue Checkliste](PLAYLIST-IDENTITY.md#nächster-zen-test--genau-eine-hintergrundaktualisierung). WL-Abnahme separat, keine echten Schreibtests.
+**Damals nächster Schritt (Aufnahme namenloser Lockups inzwischen nutzergemeldet):** im angemeldeten Zen mit 0.2.6 genau einmal „Playlists aktualisieren“ im inaktiven Arbeitstab. Bei derselben DOM-Lage mit 18 eindeutigen gültigen sichtbaren Playlist-URLs sind 18 akzeptierte Einträge zu erwarten, auch bei ausschließlich unbekannten Namen. Das ist kein festgelegter heutiger Zähler, keine Vollständigkeits- oder Namensgarantie. Nur Arbeitstab-Diagnose und bereinigtes Playlist-Diagnose-JSON zurückmelden; keine URLs, Namen, persönlichen Screenshots oder privaten Backups. [Genaue Checkliste](PLAYLIST-IDENTITY.md#nächster-zen-test--genau-eine-hintergrundaktualisierung). WL-Abnahme separat, keine echten Schreibtests.
 
 ## Historischer Stand: 0.2.5 – ausschließlich Playlist-Feed-Diagnose
 
-Die folgenden Aussagen und Ergebnisse beschreiben **0.2.5**. Insbesondere die damalige Titelpflicht und rein ablehnungsbezogene Parsersemantik sind durch den [0.2.6-Vertrag](PLAYLIST-IDENTITY.md) überholt; alte Dokumente bleiben als historische Evidenz unverändert.
+Die folgenden Aussagen und Ergebnisse beschreiben **0.2.5**. Insbesondere die damalige Titelpflicht und rein ablehnungsbezogene Parsersemantik sind durch den [0.2.6-Vertrag](PLAYLIST-IDENTITY.md) überholt; die damaligen Befunde bleiben als historische Evidenz eingeordnet.
 
 Basis: **0.2.4**, Stand: 18.10.2026. [Playlist-Feed-Diagnose: Evidenz, exakte Felder, Datenschutz und nächster Zen-Test](PLAYLIST-FEED-DIAGNOSTICS.md). Der Nutzer erlaubt ausdrücklich einen reinen Diagnoseschritt trotz noch unzureichender Evidenz für die Parserursache.
 

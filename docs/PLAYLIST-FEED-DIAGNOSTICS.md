@@ -1,4 +1,44 @@
-# Playlist-Feed-Diagnose – 0.2.5
+# Playlist-Feed-Diagnose – 0.2.7 (Diagnose-only)
+
+## Aktuelle Evidenz und Freigabegrenze 0.2.7
+
+Der vom Nutzer gemeldete Live-Befund mit **0.2.6** lautet: **18 akzeptierte `yt-lockup-view-model`-Karten ohne Namen**. Damit ist die Aufnahme namenloser Playlist-Identitäten in diesem Lauf belegt, nicht die Namensauflösung oder Vollständigkeit des Feeds. Die vermutete Namensbeziehung über **Watch list** bleibt unbewiesen. Daher **kein neuer `playlist-watch-heading`-Parser**, keine neue Namensquelle und keine gelockerte Identitäts- oder Namensprüfung.
+
+0.2.7 ist ein **Diagnose-only Release**. Die Felder unten sind implementiert; lokale Qualitätsprüfungen und XPI-Nachweis stehen in [STATUS.md](STATUS.md). Es wurden keine eigenen Live-Tests oder Live-Validierungen durchgeführt; der Befund oben stammt vom Nutzer. Der Identitäts-/Namensvertrag ab 0.2.6 bleibt gemäß [PLAYLIST-IDENTITY.md](PLAYLIST-IDENTITY.md) unverändert. Die folgenden 0.2.5-Abschnitte sind historische Evidenz; insbesondere ihre Titelpflicht ist nicht mehr der aktuelle Akzeptanzvertrag.
+
+## `titleStructure`-Diagnosefelder
+
+Alle folgenden Felder sind rein strukturelle Zähler im optionalen `titleStructure`-Block. Neu erzeugte Berichte setzen sie explizit. Der Formatter ergänzt bei älteren vorhandenen Blöcken fehlende Zähler als 0; diese Legacy-Nullen belegen keine damalige Beobachtung. Für den Vergleich bitte einen frischen 0.2.7-Scan verwenden. Gezählt werden nur **sichtbare Elemente derselben nächsten Karte (same-card)**; verborgene Nachfahren und Inhalte verschachtelter Karten werden ausgeschlossen. Das unterscheidet diese neuen Zähler von den unten beschriebenen historischen Samples, die auch verborgene Nachfahren zählen.
+
+Ein Match setzt eine exakt übereinstimmende gültige Playlist-Identität zwischen Watch-Link und dem eindeutig belegten kanonischen Playlist-Link derselben Karte voraus. Watch-Links ersetzen niemals den kanonischen Identitätsbeleg. Fehlende, widersprüchliche und nicht eindeutig auflösbare Playlist-Bezüge bleiben getrennt sichtbar.
+
+| Feld                                            | Strukturelle Beobachtung                                                                                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `watchLinksMatchingPlaylist`                    | Sichtbare Watch-Links mit exakt passendem gültigem Playlist-Bezug zur kanonischen Identität derselben Karte.                                                 |
+| `watchLinksMissingPlaylist`                     | Sichtbare Watch-Links ohne Playlist-Bezug.                                                                                                                   |
+| `watchLinksConflictingPlaylist`                 | Sichtbare Watch-Links mit vorhandenem, aber nicht exakt einzeln passendem `list`-Wert: abweichend, leer, ungültig oder mehrfach (auch identisch wiederholt). |
+| `watchLinksUnresolvedPlaylist`                  | Sichtbare Watch-Links mit vorhandenem `list`, aber ohne eindeutige sichtbare kanonische Vergleichsidentität derselben Karte.                                 |
+| `headingsWithMatchingWatchPlaylist`             | Sichtbare Überschriften mit strukturell zugeordnetem Watch-Link und exaktem Playlist-Match innerhalb derselben Karte.                                        |
+| `ambiguousHeadings`                             | Sichtbare Überschriften mit mehrdeutiger Watch-Link-/Playlist-Zuordnung nach den Regeln unten.                                                               |
+| `watchHeadingContainsLink`                      | Sichtbare Watch-Überschriften, die den zugeordneten sichtbaren Watch-Link enthalten.                                                                         |
+| `watchLinkContainsHeading`                      | Sichtbare Watch-Überschriften, die innerhalb des zugeordneten sichtbaren Watch-Links liegen.                                                                 |
+| `watchHeadingsInLockupMetadata`                 | Sichtbare Watch-Überschriften innerhalb des festen Metadatenelements derselben Karte.                                                                        |
+| `watchHeadingsWithCanonicalLinkInMetadata`      | Sichtbare Watch-Überschriften mit kanonischem Playlist-Link innerhalb des festen Metadatenelements derselben Karte.                                          |
+| `watchHeadingsWithCanonicalLinkOutsideMetadata` | Sichtbare Watch-Überschriften mit kanonischem Playlist-Link außerhalb des festen Metadatenelements, aber innerhalb derselben Karte.                          |
+
+**Metadata-Grenze:** ausschließlich das feste Element `yt-lockup-metadata-view-model`. Keine dynamischen Klassen, keine geratenen Klassenmuster und keine beliebigen Container als Metadatenersatz. Die letzten beiden Zähler beschreiben die Lage des kanonischen Links relativ zu dieser Grenze; sie bestätigen weder eine Titelbeziehung noch einen Namen.
+
+**Ambiguität:** mehrere Linkziele, mehrere Watch-Links, ein fehlender exakter Playlist-Match **oder mehrere Watch-Überschriften** verhindern eine eindeutige Zuordnung. Auch mehrere Watch-Links mit demselben Ziel beseitigen die strukturelle Mehrdeutigkeit nicht. Ein positiver Match-Zähler darf parallel zu Ambiguität auftreten; Strukturzähler sind keine exklusiven Akzeptanzkategorien. Enthaltensein, räumliche Nähe und Metadatenzugehörigkeit sind jeweils nur Beobachtungen, keine semantische Namensbestätigung. Die Zähler dürfen weder `nameStatus: confirmed` noch eine neue `nameSource` begründen.
+
+## Berichtsgrenze und nächster lesender Schritt
+
+Berichte enthalten ausschließlich freigegebene feste Strukturzähler und Kategorien: **keine Namen, tatsächlichen IDs, URLs, Attributwerte, HTML oder Roh-DOM**. Auch zur Klärung der Watch-list-Hypothese werden keine privaten Inhalte angefordert. Die bestehende Bereinigung an Anzeige-/Kopiergrenze baut auch die neuen Felder ausschließlich als begrenzte Zahlen neu auf.
+
+Nach den lokalen Qualitätsprüfungen: im selben Zen-Profil auf 0.2.7 aktualisieren, offene YouTube-Tabs neu laden und genau einmal „Playlists aktualisieren“ im inaktiven Arbeitstab starten. Danach nur Version, Status sowie bereinigte Arbeitstab- und Playlist-Diagnose zurückmelden. Samples bleiben auf zwölf Karten der letzten Runde begrenzt; es gibt keine neue Pollingsumme. Bestätigte Namen erscheinen normal, unbekannte weiterhin als „Playlist ohne bestätigten Namen“; keine lokalen Anzeigenamen oder Speicheränderungen in diesem Diagnoseschritt. Keine Schreibaktionen und kein Vollständigkeitsversprechen. Eine Live-Abnahme von 0.2.7 oder der Watch-list-Namensbeziehung liegt hier **nicht** vor; auch künftige positive Zähler allein wären kein Namensnachweis.
+
+## Historischer Stand: 0.2.5
+
+Die folgenden Abschnitte beschreiben ausschließlich den damaligen Diagnose- und Akzeptanzvertrag.
 
 ## Evidenz und bewusst begrenzter Umfang
 

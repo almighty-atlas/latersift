@@ -40,6 +40,17 @@ const titleStructure = {
   missingOrAmbiguousReferences: 6,
   watchLinkedHeadings: 7,
   canonicalLinkHasAriaLabel: 8,
+  watchLinksMatchingPlaylist: 9,
+  watchLinksMissingPlaylist: 10,
+  watchLinksConflictingPlaylist: 11,
+  watchLinksUnresolvedPlaylist: 12,
+  headingsWithMatchingWatchPlaylist: 13,
+  ambiguousHeadings: 14,
+  watchHeadingContainsLink: 15,
+  watchLinkContainsHeading: 16,
+  watchHeadingsInLockupMetadata: 17,
+  watchHeadingsWithCanonicalLinkInMetadata: 18,
+  watchHeadingsWithCanonicalLinkOutsideMetadata: 19,
 };
 const legacy: PlaylistCatalog['diagnostics'] = {
   reason: 'scanning',

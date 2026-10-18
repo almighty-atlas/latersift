@@ -85,6 +85,18 @@ export interface PlaylistTitleStructure {
   missingOrAmbiguousReferences: number;
   watchLinkedHeadings: number;
   canonicalLinkHasAriaLabel: number;
+  /** Diagnostic only: matching list parameters never confirm a playlist name. */
+  watchLinksMatchingPlaylist: number;
+  watchLinksMissingPlaylist: number;
+  watchLinksConflictingPlaylist: number;
+  watchLinksUnresolvedPlaylist: number;
+  headingsWithMatchingWatchPlaylist: number;
+  ambiguousHeadings: number;
+  watchHeadingContainsLink: number;
+  watchLinkContainsHeading: number;
+  watchHeadingsInLockupMetadata: number;
+  watchHeadingsWithCanonicalLinkInMetadata: number;
+  watchHeadingsWithCanonicalLinkOutsideMetadata: number;
 }
 
 export interface PlaylistCardCounts {
@@ -249,6 +261,31 @@ function titleEvidence(card: Element, canonical?: string) {
       playlistURL(node.getAttribute('href')!)?.href === canonical,
   );
   const headings = visible(HEADING);
+  const watchLinks = anchors.filter(
+    (node) => linkType(node.getAttribute('href')) === 'watch',
+  );
+  const watchRelation = (link: Element) => {
+    const ids = new URL(
+      link.getAttribute('href')!,
+      'https://www.youtube.com',
+    ).searchParams.getAll('list');
+    if (ids.length === 0) return 'missing';
+    if (!canonical) return 'unresolved';
+    return ids.length === 1 &&
+      ids[0] === new URL(canonical).searchParams.get('list')
+      ? 'matching'
+      : 'conflicting';
+  };
+  const headingLinks = (heading: Element) => {
+    const parent = heading.closest('a[href]');
+    return [
+      ...(parent ? [parent] : []),
+      ...heading.querySelectorAll('a[href]'),
+    ].filter((link) => sameCard(link) && !hidden(link));
+  };
+  const watchHeadings = headings.filter((heading) =>
+    headingLinks(heading).some((link) => watchLinks.includes(link)),
+  );
   const structure: PlaylistTitleStructure = {
     canonicalLinkCount: canonicalLinks.length,
     linkHeadings: 0,
@@ -260,6 +297,25 @@ function titleEvidence(card: Element, canonical?: string) {
     canonicalLinkHasAriaLabel: canonicalLinks.filter((node) =>
       node.hasAttribute('aria-label'),
     ).length,
+    watchLinksMatchingPlaylist: watchLinks.filter(
+      (link) => watchRelation(link) === 'matching',
+    ).length,
+    watchLinksMissingPlaylist: watchLinks.filter(
+      (link) => watchRelation(link) === 'missing',
+    ).length,
+    watchLinksConflictingPlaylist: watchLinks.filter(
+      (link) => watchRelation(link) === 'conflicting',
+    ).length,
+    watchLinksUnresolvedPlaylist: watchLinks.filter(
+      (link) => watchRelation(link) === 'unresolved',
+    ).length,
+    headingsWithMatchingWatchPlaylist: 0,
+    ambiguousHeadings: 0,
+    watchHeadingContainsLink: 0,
+    watchLinkContainsHeading: 0,
+    watchHeadingsInLockupMetadata: 0,
+    watchHeadingsWithCanonicalLinkInMetadata: 0,
+    watchHeadingsWithCanonicalLinkOutsideMetadata: 0,
   };
   const names = new Map<string, NonNullable<PlaylistEntry['nameSource']>>();
   let ambiguous = false;
@@ -292,8 +348,32 @@ function titleEvidence(card: Element, canonical?: string) {
       ...(parent ? [parent] : []),
       ...heading.querySelectorAll('a[href]'),
     ].filter((link) => sameCard(link) && !hidden(link));
-    if (links.some((link) => linkType(link.getAttribute('href')) === 'watch'))
+    const watches = links.filter((link) => watchLinks.includes(link));
+    if (watches.length) {
       structure.watchLinkedHeadings++;
+      if (watches.some((link) => watchRelation(link) === 'matching'))
+        structure.headingsWithMatchingWatchPlaylist++;
+      if (
+        links.length !== 1 ||
+        watches.length !== 1 ||
+        watchRelation(watches[0]) !== 'matching' ||
+        watchHeadings.length !== 1
+      )
+        structure.ambiguousHeadings++;
+      if (watches.some((link) => heading.contains(link)))
+        structure.watchHeadingContainsLink++;
+      if (watches.some((link) => link.contains(heading)))
+        structure.watchLinkContainsHeading++;
+      // A stable element boundary describes layout, not the meaning of its text.
+      const metadata = heading.closest('yt-lockup-metadata-view-model');
+      if (metadata && sameCard(metadata) && !hidden(metadata)) {
+        structure.watchHeadingsInLockupMetadata++;
+        if (canonicalLinks.some((link) => metadata.contains(link)))
+          structure.watchHeadingsWithCanonicalLinkInMetadata++;
+        if (canonicalLinks.some((link) => !metadata.contains(link)))
+          structure.watchHeadingsWithCanonicalLinkOutsideMetadata++;
+      }
+    }
     if (linked(heading)) {
       structure.linkHeadings++;
       add(heading, 'playlist-heading');
@@ -490,6 +570,13 @@ function cardSample(
     const tag = safeTag(child);
     childTags[tag] = (childTags[tag] ?? 0) + 1;
   }
+  // Unlike legacy raw link counts, title evidence excludes hidden/nested cards.
+  const canonicalURLs = new Set(
+    [...card.querySelectorAll('a[href]')]
+      .filter((node) => node.closest(CARDS) === card && !hidden(node))
+      .map((node) => playlistURL(node.getAttribute('href')!)?.href)
+      .filter((url): url is string => !!url),
+  );
   return {
     index,
     tag: safeTag(card),
@@ -499,10 +586,7 @@ function cardSample(
     distinctValidIds: ids.size,
     titleStructure: titleEvidence(
       card,
-      [...card.querySelectorAll('a[href]')]
-        .filter((node) => !hidden(node))
-        .map((node) => playlistURL(node.getAttribute('href')!))
-        .find((url) => url)?.href,
+      canonicalURLs.size === 1 ? [...canonicalURLs][0] : undefined,
     ).structure,
     titleNodes: {
       playlistTitle: card.querySelectorAll('[id="playlist-title"]').length,
