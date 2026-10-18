@@ -16,6 +16,78 @@ export interface Video {
   scannedAt: string;
   originalPlaylist: 'WL';
 }
+export interface ScrollPosition {
+  container: string;
+  top: number;
+  height: number;
+  viewport: number;
+  /** Scan-local element identity; never a DOM id or attribute value. */
+  epoch?: number;
+}
+export interface ScrollActionObservation {
+  kind: 'advance' | 'recovery' | 'reset';
+  sequence?: number;
+  before: ScrollPosition | null;
+  requestedTop: number | null;
+  after: ScrollPosition | null;
+  outcome:
+    | 'target-observed'
+    | 'no-movement'
+    | 'partial-or-divergent'
+    | 'unavailable'
+    | 'error';
+  /** Synchronous geometry observation, not proof that browser input was absent. */
+  attribution: 'during-call-only';
+}
+export interface LoadingAreaObservation {
+  visibleElements: number;
+  inViewport: boolean | null;
+  distanceToViewport: number | null;
+}
+export interface ScrollTraceEntry {
+  round: number;
+  elapsedMs: number;
+  visibility: 'hidden' | 'visible' | 'unknown';
+  scroll: ScrollPosition | null;
+  distanceToEnd: number | null;
+  renderedRows: number;
+  visibleRows: number;
+  confirmedCount: number;
+  newConfirmed: number;
+  progressAgeMs: number;
+  continuation: boolean;
+  loadingArea?: LoadingAreaObservation;
+  /** A regular DOM end is not proof of the website's actual loading trigger. */
+  atGeometryEnd: boolean;
+  action?: ScrollActionObservation;
+  /** Difference after the previous call returned: manual input/layout/async scrolling unknown. */
+  afterAction?: number;
+  laterDelta: number | null;
+  laterAttribution: 'unknown';
+  containerChanged: boolean;
+}
+export interface ScrollRecoveryObservation {
+  elapsedMs: number;
+  action?: ScrollActionObservation;
+  confirmedBefore: number;
+  confirmedAfter: number;
+  result:
+    'pending' | 'new-ids-later-observed' | 'no-new-ids-observed' | 'unresolved';
+}
+export interface ScanScrollTrace {
+  history: ScrollTraceEntry[];
+  actionCount: number;
+  containerChanges: number;
+  totalRecoveryAttempts: number;
+  endObservations: number;
+  lastAction?: ScrollActionObservation;
+  recoveryHistory?: ScrollRecoveryObservation[];
+  progressEvents?: {
+    elapsedMs: number;
+    confirmedCount: number;
+    newConfirmed: number;
+  }[];
+}
 export interface ScanDiagnostics {
   lastProgressAt: string;
   visibility: string;
@@ -23,12 +95,8 @@ export interface ScanDiagnostics {
   highestPosition: number;
   missingPositions: number[];
   recoveryAttempts: number;
-  scroll: {
-    container: string;
-    top: number;
-    height: number;
-    viewport: number;
-  } | null;
+  scroll: ScrollPosition | null;
+  scrollTrace?: ScanScrollTrace;
   continuation: boolean;
   confirmedCount: number;
   documentId?: string;

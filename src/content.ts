@@ -110,9 +110,10 @@ browser.runtime.onConnect.addListener((port) => {
           get documentId() {
             return documentId;
           },
-          advance: scroller.advance,
-          scrollInfo: scroller.info,
-          resetScroll: scroller.reset,
+          advance: scroller.observedAdvance,
+          scrollInfo: scroller.observedInfo,
+          resetScroll: scroller.observedReset,
+          loadingArea: scroller.observedLoadingArea,
         }).scanWatchLater(
           controller.signal,
           persist,

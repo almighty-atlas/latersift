@@ -1,4 +1,11 @@
-import type { Scan, Video } from '../model';
+import type {
+  LoadingAreaObservation,
+  Scan,
+  ScanScrollTrace,
+  ScrollActionObservation,
+  ScrollPosition,
+  Video,
+} from '../model';
 import {
   emptyNotice,
   expectedCount,
@@ -10,12 +17,13 @@ import {
 export interface ScanEnvironment {
   doc: Document;
   url(): string;
-  advance(recovery?: boolean): void;
+  advance(recovery?: boolean): ScrollActionObservation | void;
   wait(ms: number, signal: AbortSignal): Promise<void>;
   now?(): number;
   documentId?: string;
   scrollInfo?(): NonNullable<Scan['diagnostics']>['scroll'];
-  resetScroll?(): void;
+  resetScroll?(): ScrollActionObservation | void;
+  loadingArea?(): LoadingAreaObservation;
 }
 export const wait = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -91,8 +99,26 @@ export async function scanWatchLater(
       .filter((v) => evidence.has(v.id))
       .forEach((v) => confirmed.set(v.id, v));
   }
+  const scrollTrace: ScanScrollTrace = {
+    history: [],
+    actionCount: 0,
+    containerChanges: 0,
+    totalRecoveryAttempts: 0,
+    endObservations: 0,
+    recoveryHistory: [],
+    progressEvents: [],
+  };
+  let pendingRecoveryObserved = false;
+  const recordAction = (action: ScrollActionObservation | void) => {
+    scrollTrace.actionCount++;
+    if (action) {
+      action.sequence = scrollTrace.actionCount;
+      scrollTrace.lastAction = action;
+    } else delete scrollTrace.lastAction;
+    return action;
+  };
   // Fresh/reloaded documents must revisit the beginning, including virtualized rows.
-  if (!sameDocument) env.resetScroll?.();
+  if (!sameDocument && env.resetScroll) recordAction(env.resetScroll());
   let lastProgress = time,
     stableSince = time,
     activeMs = 0,
@@ -109,6 +135,9 @@ export async function scanWatchLater(
     ? (resume?.unidentifiableRows ?? 0)
     : 0;
   let priorScroll = env.scrollInfo?.() ?? null;
+  const sameContainer = (a: ScrollPosition | null, b: ScrollPosition | null) =>
+    !!a && !!b && a.container === b.container && a.epoch === b.epoch;
+  let priorAction = scrollTrace.lastAction;
   let totalAttentionMs = 0,
     hiddenQuietMs = 0,
     activatedSinceTick = false;
@@ -129,6 +158,10 @@ export async function scanWatchLater(
   let previousContinuation: boolean | undefined;
   let previousExpected = sameDocument ? resume!.expectedCount : null;
   const results: string[] = [];
+  const recoveryResult = (result: string) => {
+    results.push(result);
+    if (results.length > 10) results.shift();
+  };
   const timerThrottling = {
     requestedMs: config.intervalMs,
     lastElapsedMs: 0,
@@ -203,10 +236,25 @@ export async function scanWatchLater(
       previousHidden = hidden;
       const scroll = env.scrollInfo?.() ?? null;
       const approaching =
-        !!scroll && scroll.top < scroll.height - scroll.viewport - 2;
-      // Travelling through already loaded rows is not a failed load attempt.
-      if (approaching && priorScroll && scroll.top > priorScroll.top)
+        !!scroll &&
+        scroll.viewport > 0 &&
+        scroll.top < scroll.height - scroll.viewport - 2;
+      const containerChanged =
+        !!priorScroll && !!scroll && !sameContainer(priorScroll, scroll);
+      if (containerChanged) scrollTrace.containerChanges++;
+      // Do not mistake a different element's scrollTop for forward travel.
+      if (
+        approaching &&
+        sameContainer(priorScroll, scroll) &&
+        scroll!.top > priorScroll!.top
+      )
         stallMs = 0;
+      const afterAction = priorAction?.sequence;
+      const laterDelta =
+        priorAction?.after && sameContainer(priorAction.after, scroll)
+          ? scroll!.top - priorAction.after.top
+          : null;
+      priorAction = undefined;
       priorScroll = scroll;
       const rows = [...env.doc.querySelectorAll(ROW)];
       const count = expectedCount(env.doc) ?? (emptyNotice(env.doc) ? 0 : null);
@@ -217,6 +265,7 @@ export async function scanWatchLater(
       }
       previousExpected = count;
       scan.expectedCount = count;
+      const beforeConfirmed = confirmed.size;
       let progress = false,
         unknown = 0;
       for (const row of rows) {
@@ -232,8 +281,23 @@ export async function scanWatchLater(
         videos.set(video.id, video);
       }
       scan.unidentifiableRows = Math.max(scan.unidentifiableRows, unknown);
+      const pendingRecovery = scrollTrace.recoveryHistory!.at(-1);
+      if (pendingRecovery?.result === 'pending') {
+        pendingRecoveryObserved = true;
+        pendingRecovery.confirmedAfter = confirmed.size;
+        if (progress) pendingRecovery.result = 'new-ids-later-observed';
+      }
       if (progress) {
-        if (recoveries) results.push(`Fortschritt nach Recovery ${recoveries}`);
+        scrollTrace.progressEvents = [
+          ...scrollTrace.progressEvents!.slice(-7),
+          {
+            elapsedMs: Math.max(0, time - Date.parse(scan.startedAt)),
+            confirmedCount: confirmed.size,
+            newConfirmed: Math.max(0, confirmed.size - beforeConfirmed),
+          },
+        ];
+        if (recoveries)
+          recoveryResult(`Fortschritt nach Recovery ${recoveries}`);
         lastProgress = time;
         stableSince = time;
         stallMs = 0;
@@ -264,6 +328,50 @@ export async function scanWatchLater(
         scan.unidentifiableRows === 0;
       scan.videos = [...videos.values()];
       scan.confirmedVideoIds = [...confirmed.keys()];
+      const visibleCache = new WeakMap<Element, boolean>();
+      const visibleElement = (node: Element): boolean => {
+        const cached = visibleCache.get(node);
+        if (cached !== undefined) return cached;
+        const style = env.doc.defaultView?.getComputedStyle(node);
+        const visible =
+          !node.matches('[hidden], [aria-hidden="true"]') &&
+          style?.display !== 'none' &&
+          style?.visibility !== 'hidden' &&
+          (!node.parentElement || visibleElement(node.parentElement));
+        visibleCache.set(node, visible);
+        return visible;
+      };
+      // CSS-visible DOM rows, not a claim that all rows intersect the viewport.
+      const visibleRows = rows.filter(visibleElement).length;
+      const atGeometryEnd = !!scroll && scroll.viewport > 0 && !approaching;
+      if (atGeometryEnd) scrollTrace.endObservations++;
+      const traceEntry: ScanScrollTrace['history'][number] = {
+        round,
+        elapsedMs: Math.max(0, time - Date.parse(scan.startedAt)),
+        visibility: hidden
+          ? 'hidden'
+          : env.doc.visibilityState === 'visible'
+            ? 'visible'
+            : 'unknown',
+        scroll,
+        distanceToEnd:
+          scroll && scroll.viewport > 0
+            ? Math.max(0, scroll.height - scroll.viewport - scroll.top)
+            : null,
+        renderedRows: rows.length,
+        visibleRows,
+        confirmedCount: confirmed.size,
+        newConfirmed: Math.max(0, confirmed.size - beforeConfirmed),
+        progressAgeMs: Math.max(0, time - lastProgress),
+        continuation,
+        loadingArea: env.loadingArea?.(),
+        atGeometryEnd,
+        afterAction,
+        laterDelta,
+        laterAttribution: 'unknown',
+        containerChanged,
+      };
+      scrollTrace.history = [...scrollTrace.history.slice(-23), traceEntry];
       scan.diagnostics = {
         lastProgressAt: new Date(lastProgress).toISOString(),
         visibility: env.doc.visibilityState,
@@ -276,6 +384,7 @@ export async function scanWatchLater(
         recoveryAttempts: recoveries,
         recoveryResults: results.slice(-10),
         scroll,
+        scrollTrace,
         continuation,
         confirmedCount: confirmed.size,
         documentId: env.documentId,
@@ -317,12 +426,28 @@ export async function scanWatchLater(
           stallMs - lastRecovery >= config.recoveryEveryMs
         ) {
           recoveries++;
+          scrollTrace.totalRecoveryAttempts++;
           lastRecovery = stallMs;
-          results.push(
+          recoveryResult(
             `Recovery ${recoveries}: Scroll-Container erneut annähern`,
           );
           scan.diagnostics.recoveryAttempts = recoveries;
-          env.advance(true);
+          const action = recordAction(env.advance(true));
+          if (action) traceEntry.action = action;
+          priorAction = action || undefined;
+          if (pendingRecovery?.result === 'pending')
+            pendingRecovery.result = 'no-new-ids-observed';
+          scrollTrace.recoveryHistory = [
+            ...scrollTrace.recoveryHistory!.slice(-2),
+            {
+              elapsedMs: traceEntry.elapsedMs,
+              action: action || undefined,
+              confirmedBefore: confirmed.size,
+              confirmedAfter: confirmed.size,
+              result: 'pending',
+            },
+          ];
+          pendingRecoveryObserved = false;
           recoveredThisRound = true;
         }
       } else {
@@ -357,8 +482,16 @@ export async function scanWatchLater(
         else
           finish(
             'incomplete',
-            approaching ? 'scroll_unreachable' : 'recovery_exhausted',
-            'Teilimport: YouTube liefert nach begrenzten Scroll-Versuchen keine belegbar vollständige Liste. Diagnose prüfen und erneut versuchen.',
+            approaching
+              ? 'scroll_unreachable'
+              : atGeometryEnd && continuation
+                ? hidden
+                  ? 'background_loading_stalled'
+                  : 'loading_stalled'
+                : 'recovery_exhausted',
+            atGeometryEnd && continuation
+              ? 'Teilimport: Am geometrischen Ende des gewählten Scrollbereichs bleiben Continuation und Videobestand nach begrenzter Recovery unverändert. Ob YouTubes Ladeauslöser aktiv wurde, ist nicht belegt. Teilbestand gesichert.'
+              : 'Teilimport: YouTube liefert nach begrenzten Scroll-Versuchen keine belegbar vollständige Liste. Diagnose prüfen und erneut versuchen.',
           );
         break;
       }
@@ -382,7 +515,11 @@ export async function scanWatchLater(
         time - lastSaved >= 15000
       )
         await persist();
-      if (!pausedHidden && !recoveredThisRound) env.advance();
+      if (!pausedHidden && !recoveredThisRound) {
+        const action = recordAction(env.advance());
+        if (action) traceEntry.action = action;
+        priorAction = action || undefined;
+      }
       const waitStarted = clock();
       await env.wait(config.intervalMs, signal);
       const waitedMs = Math.max(0, clock() - waitStarted);
@@ -420,6 +557,14 @@ export async function scanWatchLater(
     );
   }
   env.doc.removeEventListener('visibilitychange', visibilityChanged);
+  const pendingRecovery = scrollTrace.recoveryHistory!.at(-1);
+  if (pendingRecovery?.result === 'pending')
+    pendingRecovery.result =
+      scan.status === 'interrupted' ||
+      scan.status === 'failed' ||
+      !pendingRecoveryObserved
+        ? 'unresolved'
+        : 'no-new-ids-observed';
   scan.finishedAt = new Date(time).toISOString();
   await persist();
   return scan;

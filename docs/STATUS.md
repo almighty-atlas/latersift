@@ -1,6 +1,25 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.8 – sichtbare, unbestätigte Namenskandidaten
+## Aktuell: 0.2.9 – Watch-Later-Scrollsteuerung und Nachladebeobachtung
+
+- **Nutzerbestätigter 0.2.8-Befund:** YouTube-Anzahl 4.927; 100 Videos automatisch im Hintergrund, weitere 100 erst nach manuellem Scrollen. Der Checkpoint mit 200 nach etwa 25 Sekunden (`hidden`, experimentell, Dokument 15053/26004 bei Viewport 1258, Continuation sichtbar, null Recoveries, acht verzögerte Timer bis 3165 ms) entstand nach Eingriff. **Kein Beleg, dass der automatische Scanner am tatsächlichen Ladebereich erfolglos wartete.**
+- **Belegte Codefehler, nicht als Live-Ursache behauptet:** unbrauchbare Overflow-Vorfahren mit Viewport null/verstecktem Inhalt konnten gewählt werden; Containerwechsel konnte fälschlich als Vorwärtsfahrt gelten. Watch-Later-Pfad prüft Sichtbarkeit/Viewport und vergleicht laufzeitlokale Element-Epochen.
+- **Diagnose:** höchstens 24 Beobachtungen mit Soll-/Ist-Position und -Bewegung, Ladebereichlage, Zeilen-/Bestätigungszählern, Fortschrittsalter, Containerwechsel und Timern. Letzte drei Recovery-Ergebnisse und acht Fortschrittsereignisse separat erhalten. Unmittelbare Messung nur `during-call-only`, spätere Bewegung immer `unknown`; kein falscher automatischer Erfolgsnachweis nach manuellem Eingriff. Recovery ohne Nachbeobachtung bleibt `unresolved`.
+- **Kopiergrenze:** neuer Importformatter rekonstruiert erlaubte Enums und begrenzte Zahlen/Listen auch aus manipuliertem Speicher. Keine Titel, IDs, URLs, DOM-Inhalte, Dokument-UUIDs oder Rohfehler. Bisherige Diagnosefelder kompatibel erhalten.
+- **Unverändert:** Playlist-Feed und Namenskandidaten aus 0.2.8, Schreibgates, Rechte, Schrittweite, Intervalle, Retry-Limits und Vollständigkeitsbedingungen. Keine automatische Aktivierung, Wiedergabe, Sichtbarkeitsmanipulation oder YouTube-Schreibaktionen.
+- **Live-Ursache offen:** Timerverzögerung ist beobachtet, eine YouTube-/Browser-Sperre oder falscher Live-Container nicht bewiesen. Keine eigene angemeldete Abnahme. [Analyse, Feldvertrag und Hintergrundtest](WATCH-LATER-SCROLL.md). Mehr als 100 automatisch bestätigte Videos wären ein Erfolg; vollständige 4.927 sind nicht erforderlich.
+
+### Qualitätsergebnisse 0.2.9
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **1018/1018 in 23 Dateien**. Neu: **15 Scroll-/Scanner-Integrationstests** und **59 Formatter-/Datenschutztests**. Automatisch 100 → 200 → 300 ausschließlich am Ende, sichtbare Continuation ohne Nachladen, verzögerte Hidden-Timer, fehlgeschlagene Bewegung, untaugliche und wechselnde Container (auch gleicher Tag), Pause/Resume, fehlende Vollständigkeitsbelege, unbekannte spätere Bewegung und begrenzte Historien geprüft. Bestehende Playlist-/Namenskandidaten- und Schreibsicherheitstests weiterhin erfolgreich.
+- `pnpm test:ui`: **96/96 in Chromium und Firefox**. Neue Prüfung für persistente Scrollhistorie, begrenzten und textfreien JSON-Export sowie tatsächlichen Kopierpfad; bestehende Playlist- und Operationsprüfungen erfolgreich.
+- `pnpm package`, `pnpm lint:extension`: erfolgreich, **0 Fehler/Warnungen/Hinweise**. `pnpm test:firefox-extension` und finale XPI temporär in **Firefox 157.0** installiert, ohne Manifestwarnungen.
+- XPI: `artifacts/latersift-0.2.9-unsigned.xpi`; SHA-256: `b5a8c877777cbd01212707cdffd1c6ed9b8fb9e8078b54c76ae873362ea07e0a`.
+- Gegenprüfung fand einen Diagnose-Grenzfall: stark verzögerte Timer konnten unmittelbar vor dem Endstatus eine Recovery ohne Nachbeobachtung auslösen. Ihr Ergebnis bleibt jetzt `unresolved`, durch Regression abgesichert. Keine falsche Aussage über erfolgloses Nachladen.
+- Keine angemeldete Live-Abnahme, Signierung oder AMO-Veröffentlichung; keine echten YouTube-Schreibaktionen. Bestehender PR #2 wird aktualisiert und nicht gemergt.
+
+## Historischer Stand: 0.2.8 – sichtbare, unbestätigte Namenskandidaten
 
 - Nutzerbefund aus 0.2.7: 18 erkannte Identitäten ohne bestätigte Namen; zwölf Samples mit eindeutiger gemeinsamer Lockup-Metadatenstruktur und exakt passenden Watch-Playlist-IDs. Struktur belegt, Titelsemantik nicht unabhängig bestätigt.
 - Kandidaten separat als `candidateName` / `candidateSource: lockup-watch-heading`; niemals neue `confirmed`-Quelle. Eindeutige sichtbare lokale Struktur, keine widersprüchlichen IDs, versteckten/nestenden Titelinhalte oder konkurrierenden Kandidaten. Konflikte bleiben scanweit bestehen, auch bei Virtualisierung.

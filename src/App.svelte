@@ -50,6 +50,7 @@
     type DialogDiagnostic,
   } from './dialog-diagnostics';
   import { watchLaterLocation } from './adapter/dom';
+  import { formatImportDiagnostic } from './import-diagnostics';
   import './style.css';
 
   let lib = $state.raw<Library>(emptyLibrary());
@@ -137,47 +138,7 @@
     incomplete: 'Teilbestand / Prüfung offen',
     failed: 'Import fehlgeschlagen',
   };
-  const diagnosticJSON = $derived.by(() => {
-    if (!scan) return '';
-    const d = scan.diagnostics;
-    return JSON.stringify(
-      {
-        count: scan.videos.length,
-        expectedCount: scan.expectedCount,
-        status: scan.status,
-        diagnostics: d
-          ? {
-              lastProgressAt: d.lastProgressAt,
-              visibility: d.visibility,
-              reason: d.reason,
-              highestPosition: d.highestPosition,
-              missingPositions: d.missingPositions,
-              recoveryAttempts: d.recoveryAttempts,
-              recoveryResults: d.recoveryResults,
-              positionConflict: d.positionConflict,
-              activeMs: d.activeMs,
-              attentionMs: d.attentionMs,
-              totalAttentionMs:
-                'totalAttentionMs' in d ? d.totalAttentionMs : undefined,
-              scroll: d.scroll
-                ? {
-                    container: d.scroll.container,
-                    top: d.scroll.top,
-                    height: d.scroll.height,
-                    viewport: d.scroll.viewport,
-                  }
-                : null,
-              continuation: d.continuation,
-              confirmedCount: d.confirmedCount,
-              backgroundMode: d.backgroundMode,
-              timerThrottling: d.timerThrottling,
-            }
-          : null,
-      },
-      null,
-      2,
-    );
-  });
+  const diagnosticJSON = $derived(scan ? formatImportDiagnostic(scan) : '');
   const cleanup = $derived(videos.filter(safeCandidate));
   const disabled = $derived(
     !ready || !owner || busy || importing || operationsBusy,

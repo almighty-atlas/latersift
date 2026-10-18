@@ -313,6 +313,127 @@ for (const totalAttentionMs of [undefined, 9000]) {
   });
 }
 
+test('0.2.9 import trace survives reload and copies bounded observations without private data', async ({
+  page,
+}) => {
+  const scroll = {
+    container: 'document',
+    epoch: 1,
+    top: 1000,
+    height: 2000,
+    viewport: 1000,
+  };
+  const action = {
+    kind: 'advance' as const,
+    sequence: 2,
+    before: { ...scroll, top: 500 },
+    requestedTop: 1000,
+    after: scroll,
+    outcome: 'target-observed' as const,
+    attribution: 'during-call-only' as const,
+  };
+  const entry = {
+    round: 3,
+    elapsedMs: 3000,
+    visibility: 'hidden' as const,
+    scroll,
+    distanceToEnd: 0,
+    renderedRows: 100,
+    visibleRows: 100,
+    confirmedCount: 100,
+    newConfirmed: 0,
+    progressAgeMs: 3000,
+    continuation: true,
+    loadingArea: {
+      visibleElements: 1,
+      inViewport: true,
+      distanceToViewport: 0,
+    },
+    atGeometryEnd: true,
+    action,
+    afterAction: 1,
+    laterDelta: 200,
+    laterAttribution: 'unknown' as const,
+    containerChanged: false,
+    title: 'PRIVATE_TRACE_TITLE',
+    url: 'https://private.invalid/secret',
+  };
+  await seed(page, {
+    status: 'incomplete',
+    expectedCount: 4927,
+    diagnostics: {
+      lastProgressAt: '2026-10-18T00:00:00.000Z',
+      visibility: 'hidden',
+      reason: 'background_loading_stalled',
+      highestPosition: 100,
+      missingPositions: [],
+      recoveryAttempts: 3,
+      scroll,
+      continuation: true,
+      confirmedCount: 100,
+      documentId: 'PRIVATE_DOCUMENT',
+      backgroundMode: 'experimental',
+      timerThrottling: {
+        requestedMs: 1000,
+        lastElapsedMs: 3165,
+        maxElapsedMs: 3165,
+        delayedWaits: 8,
+      },
+      scrollTrace: {
+        history: Array.from({ length: 40 }, () => entry),
+        actionCount: 20,
+        containerChanges: 0,
+        totalRecoveryAttempts: 3,
+        endObservations: 10,
+        lastAction: action,
+      },
+    },
+  });
+  await page.reload();
+  await page.evaluate(() =>
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value: string) =>
+          Reflect.set(globalThis, 'copiedImportDiagnostic', value),
+      },
+    }),
+  );
+  await page.getByRole('button', { name: '↓ Import', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .getByText('Import-Diagnose (ohne Video-Metadaten)', { exact: true })
+    .click();
+  const text = await dialog
+    .getByRole('textbox', { name: 'Import-Diagnose JSON' })
+    .inputValue();
+  const report = JSON.parse(text);
+  expect(report.diagnostics.scrollTrace.history).toHaveLength(24);
+  expect(report.diagnostics.scrollTrace.history[0]).toMatchObject({
+    afterAction: 1,
+    laterDelta: 200,
+    laterAttribution: 'unknown',
+    action: { sequence: 2, requestedDelta: 500, observedDelta: 500 },
+    loadingArea: { inViewport: true },
+  });
+  expect(report.diagnostics.reason).toBe('background_loading_stalled');
+  expect(report.diagnostics.timerThrottling.delayedWaits).toBe(8);
+  expect(text).not.toMatch(
+    /PRIVATE_|private.invalid|Fixture Video|Fixture Channel|documentId|watch\?v=/,
+  );
+  await dialog
+    .getByRole('button', { name: 'Diagnose kopieren', exact: true })
+    .click();
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, 'copiedImportDiagnostic'),
+    ),
+  ).toBe(text);
+  await expect(
+    dialog.getByText('Vollständig geprüft', { exact: true }),
+  ).toHaveCount(0);
+});
+
 test('latest complete scan does not offer resume for an older incomplete scan', async ({
   page,
 }) => {

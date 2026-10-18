@@ -8,6 +8,10 @@
 
 **M3 bleibt experimentell und vorläufig, Live-Abnahme ausstehend.** Es wurden keine eigenen Live-Schreibaktionen ausgeführt. Die vollständige lokale Prüffolge war erfolgreich (Details unten); CI-Nachweise werden im [Lieferstatus](STATUS.md) verlinkt. Keine allgemeine reale DOM-Kompatibilität behauptet. Historische 0.1.1-Ergebnisse werden nicht auf 0.2.0 übertragen.
 
+## Aktuelle 0.2.9-Abnahme
+
+[Watch-Later-Scrollanalyse und Hintergrundtest](WATCH-LATER-SCROLL.md): ausschließlich im Hintergrund, ohne Aktivierung oder manuelles Scrollen, mindestens zwei Minuten oder bis zum begründeten Endstatus, anschließend bei Bedarf kontrolliert pausieren. Version, automatisch bestätigte Anzahl, Status und bereinigte Importdiagnose erfassen. Keine privaten Exporte, keine Schreibtests. Der 0.2.8-Checkpoint nach manuellem Eingriff ist kein Nachweis automatischer End-/Ladebereichsanfahrt.
+
 ## Automatisiert (keine echten Playlist-Änderungen)
 
 Vollständiger lokaler Lauf für 0.2.0:

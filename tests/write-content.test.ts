@@ -728,7 +728,23 @@ describe('real content.ts shared scanner/write lock integration', () => {
       },
       scanWatchLater,
     });
+    const observation = {
+      kind: 'advance' as const,
+      before: null,
+      requestedTop: null,
+      after: null,
+      outcome: 'unavailable' as const,
+      attribution: 'during-call-only' as const,
+    };
     vi.mocked(createPlaylistScroller).mockReturnValue({
+      observedAdvance: vi.fn(() => observation),
+      observedReset: vi.fn(() => ({ ...observation, kind: 'reset' as const })),
+      observedInfo: vi.fn(() => null),
+      observedLoadingArea: vi.fn(() => ({
+        visibleElements: 0,
+        inViewport: null,
+        distanceToViewport: null,
+      })),
       advance: vi.fn(),
       info: vi.fn(),
       reset: vi.fn(),
@@ -759,6 +775,17 @@ describe('real content.ts shared scanner/write lock integration', () => {
       const scanner = connect('latersift-readonly-v1');
       const scanning = scanner.send({ type: 'scan' });
       expect(fixture.scanWatchLater).toHaveBeenCalledOnce();
+      const scroller = vi
+        .mocked(createPlaylistScroller)
+        .mock.results.at(-1)!.value;
+      expect(createYouTubeAdapter).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          advance: scroller.observedAdvance,
+          scrollInfo: scroller.observedInfo,
+          resetScroll: scroller.observedReset,
+          loadingArea: scroller.observedLoadingArea,
+        }),
+      );
       const writer = connect();
       await writer.send(request('add'));
       expect(writer.port.postMessage).toHaveBeenCalledWith({
