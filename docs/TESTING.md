@@ -142,3 +142,16 @@ Checkpoints: bei geänderter Anzahl nach 100 neuen IDs oder 5 Sekunden, sonst sp
 - Zusammenfassung: nichts vorausgewählt, Limit 1 unabhängig von Rundengröße, konkrete IDs/Aktionen/Ziel-URLs, separate Add-/Remove-Status und kein Erfolg aus bloßem Vormerken. Ohne gültige Auswahl/Zustimmung/persistierten aktuellen vollständigen Snapshot/Exportbestätigung keine Ausführung.
 
 Alle manuellen Resultate mit tatsächlichem Befund dokumentieren. **Kein Live-M3-Erfolg ist durch diese Anleitung vorweggenommen.**
+
+## 0.2.10 Schnellimport
+
+`tests/scanner.test.ts` verbindet den Scanner mit dem tatsächlichen Scrolladapter:
+DOM-Wachstum 100 → 200 → 300, Checkpoint vor Sprung, Stepwise-Vergleich, entfernte
+Zeilen, Lücken/Konflikte, Stillstand mit Continuation, fehlgeschlagene Sprünge,
+verzögerte Timer, Pause/Resume und Speicherfehler. `tests/ui/fast-import.spec.ts`
+prüft zusätzlich native Scrollbenachrichtigungen und echte Containergeometrie
+in Chromium und Firefox, einschließlich Virtualisierungsfallback.
+Bridge-/Content-Tests sichern den ausdrücklichen Transport der Freigabe;
+Formatter-/UI-Tests prüfen ausgeschalteten Standard, Persistenz und bereinigte
+Diagnosekopie. Diese synthetischen Tests ersetzen nicht die
+[angemeldete Zen-Abnahme](WATCH-LATER-FAST-IMPORT.md#zen-abnahme).

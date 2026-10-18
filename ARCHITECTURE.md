@@ -117,3 +117,15 @@ Anfangslimit **1**, keine Vorauswahl. Nur eine tatsächlich geänderte und verif
 Berechtigungen bleiben unverändert: `unlimitedStorage` und `https://www.youtube.com/*`, kein `cookies`, kein `tabs`-Vollzugriff, keine neuen Privilegien. Die bestehende Host-Berechtigung trägt Scan und ausdrücklich freigegebene native DOM-Aktionen. Die offizielle Watch-Later-Data-API scheidet aus; keine undokumentierten Innertube-Endpunkte. Keine Abhängigkeit von Chromium-Service-Workern, Ollama oder Cloud.
 
 Die vollständige lokale Prüffolge war erfolgreich: **466/466 Vitest-Tests in 14 Dateien**, davon sechs vollständige Integrationen mit realem Executor, IndexedDB, Autorität, Transport und nativem Adapter gegen synthetisches DOM; **48/48 UI-Tests in beiden Browsern**, Check/Lint/Format, Produktionsbuild, Web-ext, Firefox-157-Installation von `dist` und finaler XPI sowie Paketbau. Keine echten YouTube-Mutationen; Live-M3-Abnahme steht aus. CI-Nachweise werden im [Lieferstatus](docs/STATUS.md) verlinkt. Der nächste manuelle Schritt ist der [genau eine bewusst ausgewählte Entscheidung umfassende Pilot](docs/TESTING.md#erster-m3-live-pilot-genau-eine-entscheidung). Es wurden keine eigenen Live-Schreibaktionen ausgeführt.
+
+## Experimental Watch Later end jumps
+
+An explicit per-invocation `fast-jump` opt-in uses the existing content-script
+scanner and committed checkpoint ACK boundary. End jumps use only the detected
+container's native scroll geometry. DOM retention and contiguous positional
+evidence are checked before each jump. Uncertain retention, gaps, conflicts,
+geometry failures or bounded stalls switch to stepwise scanning and rebuild
+position evidence from the beginning while retaining collected videos. Snapshot
+and completeness contracts remain unchanged. Sanitized performance counters
+report observed intervals, never estimated network latency. See
+[the fast-import contract](docs/WATCH-LATER-FAST-IMPORT.md).

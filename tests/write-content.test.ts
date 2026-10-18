@@ -738,6 +738,10 @@ describe('real content.ts shared scanner/write lock integration', () => {
     };
     vi.mocked(createPlaylistScroller).mockReturnValue({
       observedAdvance: vi.fn(() => observation),
+      observedEndJump: vi.fn(() => ({
+        ...observation,
+        kind: 'end-jump' as const,
+      })),
       observedReset: vi.fn(() => ({ ...observation, kind: 'reset' as const })),
       observedInfo: vi.fn(() => null),
       observedLoadingArea: vi.fn(() => ({
@@ -773,14 +777,23 @@ describe('real content.ts shared scanner/write lock integration', () => {
     const fixture = await integration();
     try {
       const scanner = connect('latersift-readonly-v1');
-      const scanning = scanner.send({ type: 'scan' });
+      const scanning = scanner.send({
+        type: 'scan',
+        mode: 'fast-jump',
+        background: 'experimental',
+      });
       expect(fixture.scanWatchLater).toHaveBeenCalledOnce();
+      expect(fixture.scanWatchLater.mock.calls[0][3]).toEqual({
+        mode: 'fast-jump',
+        background: 'experimental',
+      });
       const scroller = vi
         .mocked(createPlaylistScroller)
         .mock.results.at(-1)!.value;
       expect(createYouTubeAdapter).toHaveBeenLastCalledWith(
         expect.objectContaining({
           advance: scroller.observedAdvance,
+          jumpToEnd: scroller.observedEndJump,
           scrollInfo: scroller.observedInfo,
           resetScroll: scroller.observedReset,
           loadingArea: scroller.observedLoadingArea,

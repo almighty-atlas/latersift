@@ -97,7 +97,7 @@ function action(value: unknown) {
     typeof before.epoch === 'number' &&
     before.epoch === after.epoch;
   return {
-    kind: choice(a.kind, ['advance', 'recovery', 'reset']),
+    kind: choice(a.kind, ['advance', 'recovery', 'reset', 'end-jump']),
     sequence: optionalNumber(a.sequence),
     before,
     requestedTop,
@@ -201,6 +201,64 @@ function trace(value: unknown) {
           }),
   };
 }
+function performance(value: unknown) {
+  const p = object(value);
+  return {
+    mode: choice(p.mode, ['stepwise', 'fast-jump']),
+    ...Object.fromEntries(
+      [
+        'endJumps',
+        'loadEvents',
+        'progressIntervals',
+        'progressIntervalTotalMs',
+        'averageProgressIntervalMs',
+        'scrollApproachMs',
+        'endWithoutNewIdsMs',
+        'jumpToNewIdsMs',
+        'jumpToNewIdsSamples',
+        'fallbackCount',
+        'renderedRows',
+        'minRenderedPosition',
+        'maxRenderedPosition',
+        'minVisiblePosition',
+        'maxVisiblePosition',
+        'missingWithinConfirmedRange',
+        'uniqueRenderedIds',
+      ].map((key) => [key, number(p[key])]),
+    ),
+    renderedRowsDelta: number(p.renderedRowsDelta, true),
+    scrollHeightDelta: number(p.scrollHeightDelta, true),
+    positionConflicts: boolean(p.positionConflicts),
+    domBehavior: choice(p.domBehavior, [
+      'unknown',
+      'growing',
+      'virtualization-suspected',
+    ]),
+    fallbackReasons: (Array.isArray(p.fallbackReasons)
+      ? p.fallbackReasons.slice(-10)
+      : []
+    ).map((reason: unknown) =>
+      choice(reason, [
+        'virtualization-or-removed-rows',
+        'position-gap-or-conflict',
+        'container-changed',
+        'geometry-unavailable',
+        'jump-failed',
+        'bounded-stall',
+      ]),
+    ),
+    milestones: (Array.isArray(p.milestones)
+      ? p.milestones.slice(0, 4)
+      : []
+    ).map((value: unknown) => {
+      const m = object(value);
+      return {
+        confirmedCount: number(m.confirmedCount),
+        elapsedMs: number(m.elapsedMs),
+      };
+    }),
+  };
+}
 function recoveryResult(value: unknown): string {
   if (typeof value !== 'string') return 'unknown';
   if (value === 'scroll_retry_no_progress') return value;
@@ -268,6 +326,14 @@ export function formatImportDiagnostic(scan: Scan): string {
                 d.scrollTrace === undefined ? undefined : trace(d.scrollTrace),
               continuation: boolean(d.continuation),
               confirmedCount: number(d.confirmedCount),
+              rewindRequired:
+                d.rewindRequired === undefined
+                  ? undefined
+                  : boolean(d.rewindRequired),
+              performance:
+                d.performance === undefined
+                  ? undefined
+                  : performance(d.performance),
               backgroundMode:
                 d.backgroundMode === undefined
                   ? undefined

@@ -75,6 +75,16 @@ test('empty state is honest, import has no simulated YouTube results', async ({
   await page.getByRole('button', { name: 'Watch Later importieren' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   const dialog = page.getByRole('dialog');
+  const fastImport = dialog.getByRole('checkbox', {
+    name: 'Schnellimport: direkt ans Listenende springen (experimentell)',
+    exact: true,
+  });
+  await expect(fastImport).not.toBeChecked();
+  await fastImport.check();
+  await expect(fastImport).toBeChecked();
+  await page.reload();
+  await page.getByRole('button', { name: 'Watch Later importieren' }).click();
+  await expect(fastImport).not.toBeChecked();
   const start = dialog.getByRole('button', {
     name: 'Read-only-Import neu starten',
   });
@@ -313,7 +323,7 @@ for (const totalAttentionMs of [undefined, 9000]) {
   });
 }
 
-test('0.2.9 import trace survives reload and copies bounded observations without private data', async ({
+test('0.2.10 import performance and trace survives reload and copies bounded observations without private data', async ({
   page,
 }) => {
   const scroll = {
@@ -379,6 +389,33 @@ test('0.2.9 import trace survives reload and copies bounded observations without
         maxElapsedMs: 3165,
         delayedWaits: 8,
       },
+      performance: {
+        mode: 'fast-jump',
+        endJumps: 3,
+        loadEvents: 2,
+        progressIntervals: 2,
+        progressIntervalTotalMs: 4000,
+        averageProgressIntervalMs: 2000,
+        scrollApproachMs: 0,
+        endWithoutNewIdsMs: 4000,
+        jumpToNewIdsMs: 4000,
+        jumpToNewIdsSamples: 2,
+        fallbackCount: 0,
+        fallbackReasons: [],
+        renderedRows: 300,
+        minRenderedPosition: 1,
+        maxRenderedPosition: 300,
+        minVisiblePosition: 1,
+        maxVisiblePosition: 300,
+        renderedRowsDelta: 100,
+        scrollHeightDelta: 10000,
+        missingWithinConfirmedRange: 0,
+        uniqueRenderedIds: 300,
+        positionConflicts: false,
+        domBehavior: 'growing',
+        milestones: [{ confirmedCount: 300, elapsedMs: 4000 }],
+        ...({ title: 'PRIVATE_PERFORMANCE' } as object),
+      },
       scrollTrace: {
         history: Array.from({ length: 40 }, () => entry),
         actionCount: 20,
@@ -408,6 +445,13 @@ test('0.2.9 import trace survives reload and copies bounded observations without
     .getByRole('textbox', { name: 'Import-Diagnose JSON' })
     .inputValue();
   const report = JSON.parse(text);
+  expect(report.diagnostics.performance).toMatchObject({
+    mode: 'fast-jump',
+    endJumps: 3,
+    loadEvents: 2,
+    averageProgressIntervalMs: 2000,
+    domBehavior: 'growing',
+  });
   expect(report.diagnostics.scrollTrace.history).toHaveLength(24);
   expect(report.diagnostics.scrollTrace.history[0]).toMatchObject({
     afterAction: 1,

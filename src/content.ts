@@ -111,6 +111,7 @@ browser.runtime.onConnect.addListener((port) => {
             return documentId;
           },
           advance: scroller.observedAdvance,
+          jumpToEnd: scroller.observedEndJump,
           scrollInfo: scroller.observedInfo,
           resetScroll: scroller.observedReset,
           loadingArea: scroller.observedLoadingArea,
@@ -118,9 +119,14 @@ browser.runtime.onConnect.addListener((port) => {
           controller.signal,
           persist,
           'resume' in message ? (message.resume as Scan) : undefined,
-          'background' in message && message.background === 'experimental'
-            ? { background: 'experimental' }
-            : {},
+          {
+            ...('background' in message && message.background === 'experimental'
+              ? { background: 'experimental' as const }
+              : {}),
+            ...('mode' in message && message.mode === 'fast-jump'
+              ? { mode: 'fast-jump' as const }
+              : {}),
+          },
         );
       port.postMessage({ type: 'done' });
     } catch (error) {

@@ -84,6 +84,7 @@
   let connectedTab = $state<number | null>(null);
   let pausing = $state(false);
   let experimentalBackground = $state(true);
+  let fastImport = $state(false);
   let useExistingTab = $state(false);
   let importWork: Awaited<ReturnType<typeof createWorkTab>> | null = null;
   let importTabReports = $state<WorkTabDiagnostic[]>([]);
@@ -362,6 +363,7 @@
         },
         resume ? structuredClone(resume) : undefined,
         experimentalBackground,
+        fastImport,
       );
       connectedTab = tabId;
     } catch (e) {
@@ -832,6 +834,13 @@
               bind:checked={experimentalBackground}
               disabled={importing}
             /> Experimentelles Hintergrund-Scrollen erlauben</label
+          >
+          <label
+            ><input
+              type="checkbox"
+              bind:checked={fastImport}
+              disabled={importing}
+            /> Schnellimport: direkt ans Listenende springen (experimentell)</label
           >
           <details>
             <summary>Erweitert: vorhandenen YouTube-Tab verwenden</summary>

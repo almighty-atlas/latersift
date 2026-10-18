@@ -25,7 +25,7 @@ export interface ScrollPosition {
   epoch?: number;
 }
 export interface ScrollActionObservation {
-  kind: 'advance' | 'recovery' | 'reset';
+  kind: 'advance' | 'recovery' | 'reset' | 'end-jump';
   sequence?: number;
   before: ScrollPosition | null;
   requestedTop: number | null;
@@ -88,6 +88,39 @@ export interface ScanScrollTrace {
     newConfirmed: number;
   }[];
 }
+export type FastFallbackReason =
+  | 'virtualization-or-removed-rows'
+  | 'position-gap-or-conflict'
+  | 'container-changed'
+  | 'geometry-unavailable'
+  | 'jump-failed'
+  | 'bounded-stall';
+export interface ImportPerformance {
+  mode: 'stepwise' | 'fast-jump';
+  endJumps: number;
+  loadEvents: number;
+  progressIntervals: number;
+  progressIntervalTotalMs: number;
+  averageProgressIntervalMs: number | null;
+  scrollApproachMs: number;
+  endWithoutNewIdsMs: number;
+  jumpToNewIdsMs: number;
+  jumpToNewIdsSamples: number;
+  fallbackCount: number;
+  fallbackReasons: FastFallbackReason[];
+  renderedRows: number;
+  minRenderedPosition: number | null;
+  maxRenderedPosition: number | null;
+  minVisiblePosition: number | null;
+  maxVisiblePosition: number | null;
+  renderedRowsDelta: number;
+  scrollHeightDelta: number | null;
+  missingWithinConfirmedRange: number;
+  uniqueRenderedIds: number;
+  positionConflicts: boolean;
+  domBehavior: 'unknown' | 'growing' | 'virtualization-suspected';
+  milestones: { confirmedCount: number; elapsedMs: number }[];
+}
 export interface ScanDiagnostics {
   lastProgressAt: string;
   visibility: string;
@@ -105,6 +138,8 @@ export interface ScanDiagnostics {
   attentionMs?: number;
   totalAttentionMs?: number;
   recoveryResults?: string[];
+  performance?: ImportPerformance;
+  rewindRequired?: boolean;
   backgroundMode?: 'paused' | 'experimental';
   // Delayed waits suggest throttling, but do not establish its cause.
   timerThrottling?: {

@@ -83,9 +83,11 @@ export function createPlaylistScroller(doc: Document, rootSelector?: string) {
     const top =
       kind === 'reset'
         ? 0
-        : kind === 'recovery' && node.scrollTop >= bottom - 2
-          ? Math.max(0, node.scrollTop - step)
-          : Math.min(bottom, node.scrollTop + step);
+        : kind === 'end-jump'
+          ? bottom
+          : kind === 'recovery' && node.scrollTop >= bottom - 2
+            ? Math.max(0, node.scrollTop - step)
+            : Math.min(bottom, node.scrollTop + step);
     report.requestedTop = top;
     try {
       node.scrollTo({ top, behavior: 'instant' });
@@ -148,6 +150,7 @@ export function createPlaylistScroller(doc: Document, rootSelector?: string) {
     observedAdvance: (recovery = false) =>
       observe(recovery ? 'recovery' : 'advance'),
     observedReset: () => observe('reset'),
+    observedEndJump: () => observe('end-jump'),
     reset() {
       container()?.scrollTo({ top: 0, behavior: 'instant' });
     },

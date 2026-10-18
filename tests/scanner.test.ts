@@ -1078,3 +1078,394 @@ describe('resume evidence and position integrity', () => {
     else expect(result.diagnostics?.missingPositions).toContain(2);
   });
 });
+
+describe('opt-in fast end jumps with the real scroll adapter', () => {
+  const options = { background: 'experimental', mode: 'fast-jump' } as const;
+  function growing(total = 300) {
+    const f = fixture(total, 100);
+    f.visibility('hidden');
+    Object.defineProperty(f.env.doc, 'defaultView', { value: window });
+    const container = f.env.doc.createElement('section');
+    container.style.overflowY = 'auto';
+    f.env.doc.body.append(container);
+    container.append(
+      f.env.doc.querySelector('ytd-playlist-video-list-renderer')!,
+    );
+    let end = 100;
+    let failed = false;
+    let loading = true;
+    const boundaries: number[] = [];
+    Object.defineProperties(container, {
+      scrollHeight: { get: () => end * 100 },
+      clientHeight: { value: 600 },
+      scrollTo: {
+        value: vi.fn((o: ScrollToOptions) => {
+          if (!failed) container.scrollTop = o.top ?? 0;
+        }),
+      },
+    });
+    const scroller = createPlaylistScroller(f.env.doc);
+    f.env.scrollInfo = scroller.observedInfo;
+    f.env.jumpToEnd = vi.fn(scroller.observedEndJump);
+    f.env.resetScroll = vi.fn(scroller.observedReset);
+    f.env.advance = vi.fn(scroller.observedAdvance);
+    f.env.wait = async (ms) => {
+      f.tick(ms);
+      if (loading && container.scrollTop === end * 100 - 600 && end < total) {
+        boundaries.push(end);
+        end = Math.min(total, end + 100);
+        f.render(1, end, end < total);
+      }
+    };
+    return {
+      ...f,
+      container,
+      boundaries,
+      fail: () => {
+        failed = true;
+      },
+      stopLoading: () => {
+        loading = false;
+      },
+    };
+  }
+  it('checkpoints before every jump and loads 100 → 200 → 300 only at the measured end', async () => {
+    const f = growing();
+    const saved: Scan[] = [];
+    const jump = f.env.jumpToEnd!;
+    f.env.jumpToEnd = () => {
+      const s = saved.at(-1)!;
+      expect(s.confirmedVideoIds).toHaveLength(
+        f.env.doc.querySelectorAll('ytd-playlist-video-renderer').length,
+      );
+      expect(s.videos.every((v) => v.position !== null)).toBe(true);
+      return jump();
+    };
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async (s) => {
+        saved.push(s);
+      },
+      options,
+    );
+    expect(result.status).toBe('complete');
+    expect(f.boundaries).toEqual([100, 200]);
+    expect(f.env.advance).not.toHaveBeenCalled();
+    expect(result.diagnostics?.performance).toMatchObject({
+      mode: 'fast-jump',
+      endJumps: 3,
+      loadEvents: 2,
+      averageProgressIntervalMs: 1000,
+      jumpToNewIdsMs: 2000,
+      jumpToNewIdsSamples: 2,
+      fallbackCount: 0,
+      domBehavior: 'growing',
+      minRenderedPosition: 1,
+      maxRenderedPosition: 300,
+      uniqueRenderedIds: 300,
+      milestones: [
+        { confirmedCount: 100, elapsedMs: 0 },
+        { confirmedCount: 200, elapsedMs: 1000 },
+        { confirmedCount: 300, elapsedMs: 2000 },
+      ],
+    });
+  });
+  it('measures reduced approach versus unchanged stepwise scanning on the same fixture', async () => {
+    const slow = growing(200);
+    const stepped = await scanWatchLater(
+      slow.env,
+      new AbortController().signal,
+      async () => {},
+      { background: 'experimental' },
+    );
+    const fast = growing(200);
+    const jumped = await scanWatchLater(
+      fast.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+    );
+    expect(stepped.status).toBe('complete');
+    expect(jumped.status).toBe('complete');
+    expect(slow.env.jumpToEnd).not.toHaveBeenCalled();
+    expect(stepped.diagnostics!.performance!.scrollApproachMs).toBeGreaterThan(
+      jumped.diagnostics!.performance!.scrollApproachMs,
+    );
+    expect(fast.elapsed()).toBeLessThan(slow.elapsed());
+  });
+  it.each([
+    'removed',
+    'gap',
+    'duplicate-id',
+    'duplicate-position',
+    'missing-position',
+  ])(
+    'resets proof and revisits the start on %s, never confirms skipped positions',
+    async (kind) => {
+      const f = growing();
+      const control = new AbortController();
+      let waits = 0;
+      f.env.wait = async (ms) => {
+        f.tick(ms);
+        if (++waits === 1) {
+          if (kind === 'removed') f.render(101, 100, true);
+          else {
+            f.render(1, 200, true);
+            const rows = f.env.doc.querySelectorAll(
+              'ytd-playlist-video-renderer',
+            );
+            if (kind === 'gap') rows[149].remove();
+            if (kind === 'duplicate-id')
+              rows[149]
+                .querySelector('a')!
+                .setAttribute('href', `/watch?v=${id(1)}`);
+            if (kind === 'duplicate-position')
+              rows[149].querySelector('[id="index"]')!.textContent = '1';
+            if (kind === 'missing-position')
+              rows[149].querySelector('[id="index"]')!.remove();
+          }
+        } else control.abort();
+      };
+      const saved: Scan[] = [];
+      const result = await scanWatchLater(
+        f.env,
+        control.signal,
+        async (s) => {
+          saved.push(s);
+        },
+        options,
+      );
+      expect(result.status).toBe('interrupted');
+      expect(result.confirmedVideoIds).toEqual([]);
+      expect(result.videos.length).toBeGreaterThanOrEqual(100);
+      expect(f.env.resetScroll).toHaveBeenCalledTimes(2);
+      expect(f.container.scrollTop).toBe(0);
+      expect(result.diagnostics?.performance).toMatchObject({
+        mode: 'stepwise',
+        fallbackCount: 1,
+        fallbackReasons: [
+          kind === 'removed'
+            ? 'virtualization-or-removed-rows'
+            : 'position-gap-or-conflict',
+        ],
+      });
+      expect(saved.every((s) => s.status !== 'complete')).toBe(true);
+    },
+  );
+  it('bounds unchanged height and continuation without repeated end jumps or false completion', async () => {
+    const f = growing();
+    f.stopLoading();
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+    );
+    expect(result.status).toBe('incomplete');
+    expect(f.env.jumpToEnd).toHaveBeenCalledOnce();
+    expect(result.diagnostics?.performance).toMatchObject({
+      fallbackReasons: ['bounded-stall'],
+      loadEvents: 0,
+    });
+    expect(
+      result.diagnostics!.performance!.endWithoutNewIdsMs,
+    ).toBeGreaterThanOrEqual(8000);
+  });
+  it('falls back after an end jump fails and stays incomplete', async () => {
+    const f = growing();
+    f.fail();
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+    );
+    expect(result.status).toBe('incomplete');
+    expect(f.env.jumpToEnd).toHaveBeenCalledOnce();
+    expect(result.diagnostics?.performance?.fallbackReasons).toEqual([
+      'jump-failed',
+    ]);
+  });
+  it('uses observed delayed timers without catch-up jumps', async () => {
+    const f = growing();
+    const wait = f.env.wait;
+    f.env.wait = (ms, signal) => wait(ms + 59000, signal);
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+    );
+    expect(result.status).toBe('complete');
+    expect(f.env.jumpToEnd).toHaveBeenCalledTimes(3);
+    expect(result.diagnostics?.performance?.averageProgressIntervalMs).toBe(
+      60000,
+    );
+    expect(result.diagnostics?.timerThrottling?.delayedWaits).toBe(3);
+  });
+  it('pauses with a committed checkpoint and resumes only with fresh opt-in', async () => {
+    const f = growing();
+    const control = new AbortController();
+    const jump = f.env.jumpToEnd!;
+    f.env.jumpToEnd = () => {
+      const result = jump();
+      control.abort();
+      return result;
+    };
+    const paused = await scanWatchLater(
+      f.env,
+      control.signal,
+      async () => {},
+      options,
+    );
+    expect(paused.status).toBe('interrupted');
+    expect(paused.confirmedVideoIds).toHaveLength(100);
+    f.env.jumpToEnd = vi.fn(jump);
+    const resumed = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+      structuredClone(paused),
+    );
+    expect(resumed.status).toBe('complete');
+    expect(resumed.id).toBe(paused.id);
+    expect(f.env.jumpToEnd).toHaveBeenCalled();
+    f.env.jumpToEnd = vi.fn(jump);
+    const defaultResume = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      { background: 'experimental' },
+      paused,
+    );
+    expect(defaultResume.diagnostics?.performance?.mode).toBe('stepwise');
+    expect(f.env.jumpToEnd).not.toHaveBeenCalled();
+  });
+  it('persists a pending rewind when paused at the fallback checkpoint and resumes it in stepwise mode', async () => {
+    const f = growing();
+    const control = new AbortController();
+    f.env.wait = async (ms) => {
+      f.tick(ms);
+      f.render(101, 100, true);
+    };
+    const paused = await scanWatchLater(
+      f.env,
+      control.signal,
+      async (s) => {
+        if (s.diagnostics?.rewindRequired) control.abort();
+      },
+      options,
+    );
+    expect(paused.status).toBe('interrupted');
+    expect(paused.diagnostics?.rewindRequired).toBe(true);
+    expect(paused.confirmedVideoIds).toEqual([]);
+    expect(f.env.resetScroll).toHaveBeenCalledOnce();
+    const again = new AbortController();
+    const reset = f.env.resetScroll!;
+    f.env.resetScroll = vi.fn(() => {
+      const result = reset();
+      again.abort();
+      return result;
+    });
+    const resumed = await scanWatchLater(
+      f.env,
+      again.signal,
+      async () => {},
+      { background: 'experimental' },
+      paused,
+    );
+    expect(f.env.resetScroll).toHaveBeenCalledOnce();
+    expect(f.container.scrollTop).toBe(0);
+    expect(resumed.status).toBe('interrupted');
+    expect(resumed.diagnostics?.rewindRequired).toBe(false);
+  });
+  it('stops incomplete when a fallback cannot return to the beginning', async () => {
+    const f = growing();
+    const reset = f.env.resetScroll!;
+    let calls = 0;
+    f.env.resetScroll = () => {
+      if (++calls > 1) f.fail();
+      return reset();
+    };
+    f.env.wait = async (ms) => {
+      f.tick(ms);
+      f.render(101, 100, true);
+    };
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+    );
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      confirmedVideoIds: [],
+      diagnostics: { reason: 'scroll_unreachable', rewindRequired: true },
+    });
+  });
+  it('does not grant hidden scrolling through fast mode alone', async () => {
+    const f = growing();
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      {
+        mode: 'fast-jump',
+        waitingMs: 1000,
+        attentionLimitMs: 5000,
+      },
+    );
+    expect(result.status).toBe('incomplete');
+    expect(result.diagnostics?.backgroundMode).toBe('paused');
+    expect(f.env.jumpToEnd).not.toHaveBeenCalled();
+    expect(f.env.advance).not.toHaveBeenCalled();
+  });
+  it.each(['hidden', 'navigation'])(
+    'rechecks %s after checkpoint persistence before jumping',
+    async (kind) => {
+      const f = growing();
+      f.visibility('visible');
+      const result = await scanWatchLater(
+        f.env,
+        new AbortController().signal,
+        async () => {
+          if (kind === 'hidden') f.visibility('hidden');
+          else f.env.url = () => 'https://www.youtube.com/';
+        },
+        { mode: 'fast-jump', waitingMs: 1000, attentionLimitMs: 5000 },
+      );
+      expect(result.status).toBe(
+        kind === 'hidden' ? 'incomplete' : 'interrupted',
+      );
+      expect(f.env.jumpToEnd).not.toHaveBeenCalled();
+    },
+  );
+  it('never completes fast import without a direct total count', async () => {
+    const f = growing(100);
+    f.env.doc.querySelector('#stats')!.remove();
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      options,
+    );
+    expect(result.status).toBe('incomplete');
+    expect(result.expectedCount).toBeNull();
+  });
+  it('never jumps before a checkpoint ACK or after a storage failure', async () => {
+    const f = growing();
+    await expect(
+      scanWatchLater(
+        f.env,
+        new AbortController().signal,
+        async () => {
+          throw new Error('storage');
+        },
+        options,
+      ),
+    ).rejects.toThrow('Speicherung fehlgeschlagen');
+    expect(f.env.jumpToEnd).not.toHaveBeenCalled();
+  });
+});

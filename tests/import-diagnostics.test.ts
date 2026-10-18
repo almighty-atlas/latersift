@@ -784,3 +784,45 @@ describe('copyable import diagnostics', () => {
     expect(parse({ ...scan, diagnostics: null }).diagnostics).toBeNull();
   });
 });
+
+describe('performance diagnostic copy boundary', () => {
+  it('reconstructs performance fields and strips private enum and numeric injection', () => {
+    const scan = fixture();
+    Object.assign(scan.diagnostics!, {
+      performance: {
+        mode: 'PRIVATE_MODE',
+        endJumps: 'PRIVATE_ID',
+        loadEvents: Infinity,
+        averageProgressIntervalMs: 1250,
+        renderedRowsDelta: -100,
+        scrollHeightDelta: -1000,
+        domBehavior: 'PRIVATE_TITLE',
+        fallbackReasons: ['bounded-stall', 'PRIVATE_URL'],
+        milestones: [
+          { confirmedCount: 100, elapsedMs: 2000, title: 'PRIVATE_NAME' },
+        ],
+        title: 'PRIVATE_TEXT',
+      },
+    });
+    const report = formatImportDiagnostic(scan);
+    expect(report).not.toContain('PRIVATE');
+    expect(JSON.parse(report).diagnostics.performance).toMatchObject({
+      mode: 'unknown',
+      endJumps: null,
+      loadEvents: null,
+      averageProgressIntervalMs: 1250,
+      renderedRowsDelta: -100,
+      scrollHeightDelta: -1000,
+      fallbackReasons: ['bounded-stall', 'unknown'],
+      milestones: [{ confirmedCount: 100, elapsedMs: 2000 }],
+    });
+  });
+  it.each([null, 'PRIVATE_TEXT', { fallbackReasons: {}, milestones: {} }])(
+    'handles malformed legacy performance %s',
+    (performance) => {
+      const scan = fixture();
+      Object.assign(scan.diagnostics!, { performance });
+      expect(formatImportDiagnostic(scan)).not.toContain('PRIVATE');
+    },
+  );
+});

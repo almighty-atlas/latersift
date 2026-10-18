@@ -568,3 +568,24 @@ it('reports a failed playlist commit instead of terminal success and never ackno
   expect(browser.tabs.update).not.toHaveBeenCalled();
   expect(browser.windows.update).not.toHaveBeenCalled();
 });
+
+it.each([undefined, false, true])(
+  'forwards fast-jump only with explicit opt-in (%s)',
+  async (fastImport) => {
+    await connectScan(
+      123,
+      async () => {},
+      vi.fn(),
+      undefined,
+      true,
+      fastImport,
+    );
+    expect(port.postMessage).toHaveBeenCalledExactlyOnceWith({
+      type: 'scan',
+      background: 'experimental',
+      ...(fastImport ? { mode: 'fast-jump' } : {}),
+    });
+    expect(browser.tabs.update).not.toHaveBeenCalled();
+    expect(browser.windows.update).not.toHaveBeenCalled();
+  },
+);

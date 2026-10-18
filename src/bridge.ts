@@ -25,11 +25,13 @@ export function connectScan(
   onFinish: (error?: string) => void,
   resume?: Scan,
   experimentalBackground = false,
+  fastImport = false,
 ): Promise<Runtime.Port> {
   return connectRead(tabId, onCheckpoint, onFinish, {
     type: 'scan',
     ...(resume ? { resume } : {}),
     ...(experimentalBackground ? { background: 'experimental' } : {}),
+    ...(fastImport ? { mode: 'fast-jump' } : {}),
   });
 }
 
@@ -41,6 +43,7 @@ export async function connectRead<T>(
     type: 'scan' | 'playlists';
     resume?: Scan;
     background?: 'experimental';
+    mode?: 'fast-jump';
   },
 ): Promise<Runtime.Port> {
   const { default: browser } = await import('webextension-polyfill');

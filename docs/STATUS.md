@@ -1,6 +1,26 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.9 – Watch-Later-Scrollsteuerung und Nachladebeobachtung
+## Aktuell: 0.2.10 – adaptiver experimenteller Schnellimport
+
+- **Implementiert:** standardmäßig ausgeschaltete Schnellimport-Checkbox, expliziter UI-/Port-/Content-Transport, nativer Endsprung auf dem erkannten Scrollcontainer erst nach bestätigtem Checkpoint. Keine wiederholten Sprünge während des Wartens auf IDs.
+- **Konservativer Fallback:** verschwundene Zeilen, Positionslücken/-konflikte, unklare Geometrie, Containerwechsel, fehlgeschlagene Sprünge und begrenzter Stillstand wechseln zum bisherigen Scanner. Positionsbelege werden gelöscht und nach gespeicherter Rückkehr zum Anfang erneut gesammelt; IDs bleiben erhalten. Bei Pause ausstehende Rückkehr wird dauerhaft markiert, bei nicht erreichbarem Anfang bleibt der Scan unvollständig.
+- **Diagnose:** aktueller Modus, Sprung-/Nachladezähler, beobachtete Fortschrittsintervalle, Anfahrt, Warten am Ende, Sprung-bis-ID-Zeiten, Fallback-Gründe, DOM-/Positionsmessungen und Meilensteine bei 100/200/300/500. Kopierformatter rekonstruiert nur feste Enums, begrenzte Zahlen/Listen. Keine privaten Inhalte oder geschätzten Netzwerkzeiten.
+- **Unverändert:** Playlist-Erkennung und Namenskandidaten, Vollständigkeits-/Snapshot-Regeln, Hintergrundfreigabe, Rechte und Schreibgates. Keine Wiedergabe, automatischen Fokuswechsel oder YouTube-Schreibaktionen.
+- **Live-Evidenz:** Nutzer berichtet für 0.2.9 selbstständiges Hintergrund-Nachladen mit 1–2 Minuten pro 100 bei rund 4.927 Videos. Erhaltene frühere DOM-Zeilen sind eine Nutzerbeobachtung, kein eigener technischer Nachweis.
+- **Zen-Abnahme offen:** Browsersteuerung meldet keine verbundenen Browser/Apps; bestehendes angemeldetes Zen-Profil nicht erreichbar. Keine eigenen 100/200/300/500-Live-Zeiten, keine Behauptung einer beschleunigten Gesamtimportzeit. [Ablauf, Messgrenzen und genau ein Read-only-Abnahmelauf](WATCH-LATER-FAST-IMPORT.md).
+
+### Qualitätsergebnisse 0.2.10
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `git diff --check`: erfolgreich.
+- `pnpm test`: **1.043/1.043 in 23 Dateien**. Bestehende Playlist-/Namenskandidaten- und Schreibsicherheitsprüfungen erfolgreich. Zusätzliche Regressionen für Native-Endsprünge mit Checkpoint-ACK, 100 → 200 → 300, Stepwise-Vergleich, entfernte Zeilen, Positionslücken/-konflikte, Stillstand, Timerdrosselung, fehlgeschlagene Sprünge, fehlende Gesamtzahl, Pause/Resume und ausstehende/fehlgeschlagene Rückkehr zum Anfang. Navigation und Sichtbarkeit nach asynchronem Checkpoint erneut geprüft.
+- `pnpm test:ui`: **100/100 in Chromium und Firefox**. Echte Browsergeometrie/native Scrollbenachrichtigungen gegen synthetisches DOM, Wachstum und Virtualisierungsfallback; ausgeschalteter Schnellimportstandard sowie persistierte, bereinigte Performance-Diagnose und Kopierpfad.
+- `pnpm package`, `pnpm lint:extension`: erfolgreich; **0 Fehler/Warnungen/Hinweise**. `pnpm test:firefox-extension` und `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.10-unsigned.xpi node scripts/test-firefox.mjs`: `dist` und finale XPI in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
+- Formatierung: `pnpm format:check` beanstandet lokal ausschließlich die bereits vor Arbeitsbeginn ungetrackte `AGENTS.md`; diese bleibt unverändert und wird nicht mitgeliefert. `git ls-files -z | xargs -0 node_modules/.bin/prettier --check --ignore-unknown` sowie Prettier für die beiden neuen Dokument-/Testdateien erfolgreich. Die CI prüft den sauberen Checkout mit dem regulären Befehl.
+- XPI: `artifacts/latersift-0.2.10-unsigned.xpi`; SHA-256: `ba7aaee4c236314d9f040231f1df3fe749629c4f062018d19d5141450bc51d27`.
+- Prüfprobleme vor finalem Lauf: Fortschrittszählung nach Revalidierung und unnötiger Stillstands-Fallback bei vollständig belegtem Bestand korrigiert; ein zu großes neues Unknown-Count-Fixture überschritt das Testzeitlimit und wurde auf den relevanten Bestand verkleinert. Keine Vollständigkeitsprüfung gelockert.
+- Keine Signierung, AMO-Veröffentlichung, angemeldete Zen-Abnahme oder YouTube-Schreibtests. PR #2 wird aktualisiert und nicht gemergt; GitHub-CI ist separat zu prüfen.
+
+## Historischer Stand: 0.2.9 – Watch-Later-Scrollsteuerung und Nachladebeobachtung
 
 - **Nutzerbestätigter 0.2.8-Befund:** YouTube-Anzahl 4.927; 100 Videos automatisch im Hintergrund, weitere 100 erst nach manuellem Scrollen. Der Checkpoint mit 200 nach etwa 25 Sekunden (`hidden`, experimentell, Dokument 15053/26004 bei Viewport 1258, Continuation sichtbar, null Recoveries, acht verzögerte Timer bis 3165 ms) entstand nach Eingriff. **Kein Beleg, dass der automatische Scanner am tatsächlichen Ladebereich erfolglos wartete.**
 - **Belegte Codefehler, nicht als Live-Ursache behauptet:** unbrauchbare Overflow-Vorfahren mit Viewport null/verstecktem Inhalt konnten gewählt werden; Containerwechsel konnte fälschlich als Vorwärtsfahrt gelten. Watch-Later-Pfad prüft Sichtbarkeit/Viewport und vergleicht laufzeitlokale Element-Epochen.

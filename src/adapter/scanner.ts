@@ -1,4 +1,6 @@
 import type {
+  FastFallbackReason,
+  ImportPerformance,
   LoadingAreaObservation,
   Scan,
   ScanScrollTrace,
@@ -17,6 +19,7 @@ import {
 export interface ScanEnvironment {
   doc: Document;
   url(): string;
+  jumpToEnd?(): ScrollActionObservation | void;
   advance(recovery?: boolean): ScrollActionObservation | void;
   wait(ms: number, signal: AbortSignal): Promise<void>;
   now?(): number;
@@ -62,6 +65,7 @@ export type ScanOptions = Partial<typeof SCAN_DEFAULTS> & {
   idleRounds?: number;
   // Explicit opt-in per invocation; never inferred from a resumed scan.
   background?: 'experimental';
+  mode?: 'fast-jump';
 };
 class CheckpointError extends Error {}
 export async function scanWatchLater(
@@ -76,7 +80,42 @@ export async function scanWatchLater(
   // Legacy fixture callers can still request a short settlement window.
   if (options.idleRounds !== undefined)
     config.settleMs = options.idleRounds * Math.max(1, config.intervalMs);
-  const clock = env.now ?? (() => performance.timeOrigin + performance.now());
+  const clock =
+    env.now ??
+    (() => globalThis.performance.timeOrigin + globalThis.performance.now());
+  const performanceStart = clock();
+  let observationAt = performanceStart;
+  let previousProgressAt: number | undefined;
+  let jumpAt: number | undefined;
+  let lastJumpAt: number | undefined;
+  let previousRendered = 0;
+  let previousHeight: number | undefined;
+  const performance: ImportPerformance = {
+    mode: options.mode === 'fast-jump' ? 'fast-jump' : 'stepwise',
+    endJumps: 0,
+    loadEvents: 0,
+    progressIntervals: 0,
+    progressIntervalTotalMs: 0,
+    averageProgressIntervalMs: null,
+    scrollApproachMs: 0,
+    endWithoutNewIdsMs: 0,
+    jumpToNewIdsMs: 0,
+    jumpToNewIdsSamples: 0,
+    fallbackCount: 0,
+    fallbackReasons: [],
+    renderedRows: 0,
+    minRenderedPosition: null,
+    maxRenderedPosition: null,
+    minVisiblePosition: null,
+    maxVisiblePosition: null,
+    renderedRowsDelta: 0,
+    scrollHeightDelta: null,
+    missingWithinConfirmedRange: 0,
+    uniqueRenderedIds: 0,
+    positionConflicts: false,
+    domBehavior: 'unknown',
+    milestones: [],
+  };
   let time = clock(),
     previousTime = time;
   const scan: Scan = {
@@ -99,6 +138,10 @@ export async function scanWatchLater(
       .filter((v) => evidence.has(v.id))
       .forEach((v) => confirmed.set(v.id, v));
   }
+  let rewindRequired = resume?.diagnostics?.rewindRequired === true;
+  if (rewindRequired) confirmed.clear();
+  const observedIds = new Set(confirmed.keys());
+  if (confirmed.size) previousProgressAt = performanceStart;
   const scrollTrace: ScanScrollTrace = {
     history: [],
     actionCount: 0,
@@ -256,7 +299,14 @@ export async function scanWatchLater(
           : null;
       priorAction = undefined;
       priorScroll = scroll;
+      const observedAt = clock();
+      const observedElapsed = Math.max(0, observedAt - observationAt);
+      observationAt = observedAt;
       const rows = [...env.doc.querySelectorAll(ROW)];
+      const rendered = new Map<string, Video>();
+      const rowPositions = new Map<Element, number>();
+      let duplicateRenderedId = false;
+      const confirmedBeforeRead = new Set(confirmed.keys());
       const count = expectedCount(env.doc) ?? (emptyNotice(env.doc) ? 0 : null);
       if (previousExpected !== null && count !== previousExpected) {
         // A changed playlist invalidates position evidence, but not retained IDs.
@@ -274,11 +324,141 @@ export async function scanWatchLater(
           unknown++;
           continue;
         }
+        if (video.position !== null) rowPositions.set(row, video.position);
+        if (rendered.has(video.id)) duplicateRenderedId = true;
+        rendered.set(video.id, video);
         const prior = confirmed.get(video.id);
         if (prior && prior.position !== video.position) positionConflict = true;
         if (!confirmed.has(video.id)) progress = true;
         confirmed.set(video.id, video);
         videos.set(video.id, video);
+      }
+      const renderedPositions = [...rendered.values()].map((v) => v.position);
+      const validPositions = renderedPositions.filter(
+        (p): p is number => p !== null,
+      );
+      const orderedPositions = [...new Set(validPositions)].sort(
+        (a, b) => a - b,
+      );
+      const highest = Math.max(
+        0,
+        ...[...confirmed.values()].map((v) => v.position ?? 0),
+      );
+      const confirmedPositions = new Set(
+        [...confirmed.values()].map((v) => v.position),
+      );
+      performance.missingWithinConfirmedRange = 0;
+      for (let p = 1; p <= Math.min(highest, 100000); p++)
+        if (!confirmedPositions.has(p))
+          performance.missingWithinConfirmedRange++;
+      performance.renderedRows = rows.length;
+      performance.uniqueRenderedIds = rendered.size;
+      performance.minRenderedPosition = orderedPositions[0] ?? null;
+      performance.maxRenderedPosition = orderedPositions.at(-1) ?? null;
+      performance.renderedRowsDelta = rows.length - previousRendered;
+      performance.scrollHeightDelta =
+        scroll && previousHeight !== undefined && !containerChanged
+          ? scroll.height - previousHeight
+          : null;
+      performance.positionConflicts =
+        performance.positionConflicts ||
+        positionConflict ||
+        duplicateRenderedId ||
+        validPositions.length !== orderedPositions.length;
+      const removedRows = [...confirmedBeforeRead].some(
+        (id) => !rendered.has(id),
+      );
+      if (removedRows) performance.domBehavior = 'virtualization-suspected';
+      else if (
+        previousRendered > 0 &&
+        rows.length > previousRendered &&
+        performance.domBehavior !== 'virtualization-suspected'
+      )
+        performance.domBehavior = 'growing';
+      previousRendered = rows.length;
+      previousHeight = scroll?.height;
+      // Only observed clock intervals are reported. A new height is not an ID/load event.
+      if (!hidden || background) {
+        if (approaching) performance.scrollApproachMs += observedElapsed;
+        else if (scroll && !progress)
+          performance.endWithoutNewIdsMs += observedElapsed;
+      }
+      let fallback: FastFallbackReason | undefined;
+      if (performance.mode === 'fast-jump') {
+        if (removedRows) fallback = 'virtualization-or-removed-rows';
+        else if (
+          unknown ||
+          (!rows.length && count !== 0) ||
+          performance.positionConflicts ||
+          renderedPositions.some((p) => p === null) ||
+          orderedPositions.some((p, i) => p !== i + 1) ||
+          performance.missingWithinConfirmedRange
+        )
+          fallback = 'position-gap-or-conflict';
+        else if (containerChanged) fallback = 'container-changed';
+        else if (!env.jumpToEnd || !scroll || scroll.viewport <= 0)
+          fallback = 'geometry-unavailable';
+        else if (
+          scrollTrace.lastAction?.kind === 'end-jump' &&
+          (scrollTrace.lastAction.outcome !== 'target-observed' ||
+            (!progress && approaching))
+        )
+          fallback = 'jump-failed';
+        else if (
+          !progress &&
+          !(
+            count !== null &&
+            confirmed.size === count &&
+            !hasContinuation(env.doc)
+          ) &&
+          lastJumpAt !== undefined &&
+          observedAt - lastJumpAt >= config.waitingMs
+        )
+          fallback = 'bounded-stall';
+      }
+      if (fallback) {
+        performance.mode = 'stepwise';
+        rewindRequired = true;
+        performance.fallbackCount++;
+        performance.fallbackReasons.push(fallback);
+        // Retain collected videos but rebuild positional proof from the beginning.
+        confirmed.clear();
+        positionConflict = false;
+        progress = false;
+        stableSince = time;
+        stallMs = 0;
+        jumpAt = undefined;
+      }
+      const genuinelyNewIds = [...confirmed.keys()].filter(
+        (id) => !observedIds.has(id),
+      );
+      if (genuinelyNewIds.length) {
+        genuinelyNewIds.forEach((id) => observedIds.add(id));
+        if (previousProgressAt !== undefined) {
+          performance.loadEvents++;
+          performance.progressIntervals++;
+          performance.progressIntervalTotalMs += Math.max(
+            0,
+            observedAt - previousProgressAt,
+          );
+          performance.averageProgressIntervalMs =
+            performance.progressIntervalTotalMs / performance.progressIntervals;
+        }
+        previousProgressAt = observedAt;
+        if (jumpAt !== undefined) {
+          performance.jumpToNewIdsMs += Math.max(0, observedAt - jumpAt);
+          performance.jumpToNewIdsSamples++;
+          jumpAt = undefined;
+        }
+        for (const milestone of [100, 200, 300, 500])
+          if (
+            confirmed.size >= milestone &&
+            !performance.milestones.some((m) => m.confirmedCount === milestone)
+          )
+            performance.milestones.push({
+              confirmedCount: milestone,
+              elapsedMs: Math.max(0, observedAt - performanceStart),
+            });
       }
       scan.unidentifiableRows = Math.max(scan.unidentifiableRows, unknown);
       const pendingRecovery = scrollTrace.recoveryHistory!.at(-1);
@@ -342,7 +522,18 @@ export async function scanWatchLater(
         return visible;
       };
       // CSS-visible DOM rows, not a claim that all rows intersect the viewport.
-      const visibleRows = rows.filter(visibleElement).length;
+      const visibleDOMRows = rows.filter(visibleElement);
+      const visibleRows = visibleDOMRows.length;
+      const visiblePositions = visibleDOMRows.flatMap((row) => {
+        const p = rowPositions.get(row);
+        return p === undefined ? [] : [p];
+      });
+      performance.minVisiblePosition = visiblePositions.length
+        ? Math.min(...visiblePositions)
+        : null;
+      performance.maxVisiblePosition = visiblePositions.length
+        ? Math.max(...visiblePositions)
+        : null;
       const atGeometryEnd = !!scroll && scroll.viewport > 0 && !approaching;
       if (atGeometryEnd) scrollTrace.endObservations++;
       const traceEntry: ScanScrollTrace['history'][number] = {
@@ -394,8 +585,16 @@ export async function scanWatchLater(
         totalAttentionMs,
         backgroundMode: background ? 'experimental' : 'paused',
         timerThrottling: { ...timerThrottling },
+        performance,
+        rewindRequired,
       };
-      if (proven && !continuation && time - stableSince >= config.settleMs) {
+      if (
+        !fallback &&
+        !rewindRequired &&
+        proven &&
+        !continuation &&
+        time - stableSince >= config.settleMs
+      ) {
         // A complete snapshot contains only evidence from this document, never stale resume IDs.
         scan.videos = [...confirmed.values()];
         finish(
@@ -454,7 +653,9 @@ export async function scanWatchLater(
         scan.status = 'running';
         scan.message =
           sameDocument || !resume
-            ? 'YouTube wird schrittweise gelesen …'
+            ? performance.mode === 'fast-jump'
+              ? 'YouTube wird per experimentellem Schnellimport gelesen …'
+              : 'YouTube wird schrittweise gelesen …'
             : 'Gesicherte IDs bleiben erhalten; Positionen werden nach Reload erneut bestätigt …';
       }
       if (
@@ -515,7 +716,54 @@ export async function scanWatchLater(
         time - lastSaved >= 15000
       )
         await persist();
-      if (!pausedHidden && !recoveredThisRound) {
+      if (fallback || (!pausedHidden && rewindRequired)) {
+        await persist();
+        if (!pausedHidden && !signal.aborted) {
+          const action = recordAction(env.resetScroll?.());
+          if (
+            !action ||
+            action.outcome !== 'target-observed' ||
+            action.after?.top !== 0
+          ) {
+            finish(
+              'incomplete',
+              'scroll_unreachable',
+              'Teilimport: Anfang für sichere Positionsprüfung nicht erreichbar. Bestätigter Teilbestand bleibt gesichert.',
+            );
+            break;
+          }
+          rewindRequired = false;
+          scan.diagnostics.rewindRequired = false;
+          if (action) traceEntry.action = action;
+          priorAction = action || undefined;
+        }
+      } else if (
+        !pausedHidden &&
+        !recoveredThisRound &&
+        performance.mode === 'fast-jump'
+      ) {
+        if (progress || lastJumpAt === undefined) {
+          // The ACK must represent committed IDs and positions before skipping geometry.
+          await persist();
+          if (signal.aborted)
+            throw new DOMException('Abgebrochen', 'AbortError');
+          // Persistence can yield across a visibility or navigation transition.
+          // Re-check the authorization context immediately before the jump.
+          if (
+            !watchLaterLocation(env.url()) ||
+            env.documentId !== generation ||
+            (env.doc.visibilityState === 'hidden' && !background)
+          )
+            continue;
+          jumpAt = lastJumpAt = clock();
+          performance.endJumps++;
+          const jumpStarted = clock();
+          const action = recordAction(env.jumpToEnd?.());
+          performance.scrollApproachMs += Math.max(0, clock() - jumpStarted);
+          if (action) traceEntry.action = action;
+          priorAction = action || undefined;
+        }
+      } else if (!pausedHidden && !recoveredThisRound) {
         const action = recordAction(env.advance());
         if (action) traceEntry.action = action;
         priorAction = action || undefined;
