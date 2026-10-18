@@ -37,6 +37,10 @@
   import OperationsPanel from './OperationsPanel.svelte';
   import { discoverPlaylists } from './write-bridge';
   import type { PlaylistChoice } from './operations';
+  import {
+    formatDialogDiagnostic,
+    type DialogDiagnostic,
+  } from './dialog-diagnostics';
   import { watchLaterLocation } from './adapter/dom';
   import './style.css';
 
@@ -57,6 +61,12 @@
     archiveInput = $state('');
   let playlistChoices = $state<PlaylistChoice[]>([]);
   let playlistChoice = $state('');
+  let manifestVersion = $state<string | null>(null);
+  let playlistDiagnostic = $state<DialogDiagnostic | null>(null);
+  let playlistDiagnosticFeedback = $state('');
+  const playlistDiagnosticJSON = $derived(
+    playlistDiagnostic ? formatDialogDiagnostic(playlistDiagnostic) : '',
+  );
   let operationsBusy = $state(false);
   let cleanupSelected = $state<string[]>([]),
     cleanupConfirm = $state(false);
@@ -152,6 +162,14 @@
 
   onMount(() => {
     let disposed = false;
+    void import('webextension-polyfill')
+      .then(({ default: browser }) => {
+        const version = browser.runtime.getManifest().version;
+        if (!disposed) manifestVersion = version;
+      })
+      .catch(() => {
+        /* Local UI previews have no installed manifest. */
+      });
     const timer = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -357,8 +375,12 @@
     error = '';
     playlistChoices = [];
     playlistChoice = '';
+    playlistDiagnostic = null;
+    playlistDiagnosticFeedback = '';
     try {
-      playlistChoices = await discoverPlaylists(videos[0].id);
+      playlistChoices = await discoverPlaylists(videos[0].id, (report) => {
+        playlistDiagnostic = report;
+      });
       if (!playlistChoices.length)
         error =
           'Keine Playlist-Einträge im unterstützten Save-Dialog gefunden.';
@@ -366,6 +388,15 @@
       error = `Playlists konnten nicht aus YouTube geladen werden: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       busy = false;
+    }
+  }
+  async function copyPlaylistDiagnostic() {
+    try {
+      await navigator.clipboard.writeText(playlistDiagnosticJSON);
+      playlistDiagnosticFeedback = 'Bereinigte Diagnose kopiert.';
+    } catch {
+      playlistDiagnosticFeedback =
+        'Kopieren nicht möglich. Diagnose markieren und manuell kopieren.';
     }
   }
   async function saveArchive() {
@@ -482,8 +513,12 @@
 <div class="shell" class:has-library={videos.length > 0} inert={panel !== null}>
   <header>
     <a class="brand" href="index.html" aria-label="LaterSift Startseite"
-      ><span class="brand-icon" aria-hidden="true">L<span>▸</span></span
-      >LaterSift<span class="version">LOCAL / 0.1</span></a
+      ><span class="brand-icon" aria-hidden="true">L<span>▸</span></span><span
+        class="brand-title"
+        >LaterSift<span class="version"
+          >{manifestVersion ? `v${manifestVersion}` : 'Version unbekannt'}</span
+        ></span
+      ></a
     >
     <nav aria-label="Werkzeuge">
       <button
@@ -930,6 +965,28 @@
             Kontrolle geöffnet; nach Abschluss der Abfrage kannst du zu
             LaterSift zurückwechseln.
           </p>
+          {#if playlistDiagnostic}
+            <details class="dialog-diagnostic">
+              <summary>Technische YouTube-Dialogdiagnose</summary>
+              <p class="hint">
+                UI-Auswahl und belegte Playlist-Identität werden getrennt
+                erfasst. Ein UI-Zustand beweist keine gespeicherte
+                Mitgliedschaft. Dieser Bericht enthält keine Playlist-Namen, IDs
+                oder Attributwerte.
+              </p>
+              <textarea
+                aria-label="Bereinigte YouTube-Dialogdiagnose"
+                readonly
+                rows="12"
+                value={playlistDiagnosticJSON}
+              ></textarea>
+              <button onclick={copyPlaylistDiagnostic}>Diagnose kopieren</button
+              >
+              {#if playlistDiagnosticFeedback}<p role="status">
+                  {playlistDiagnosticFeedback}
+                </p>{/if}
+            </details>
+          {/if}
           {#if playlistChoices.length}
             <p class="hint">
               {playlistChoices.length} Einträge gelesen. Auswahlzustand ist keine

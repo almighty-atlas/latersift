@@ -92,6 +92,20 @@ small,
   color: var(--muted);
   line-height: 1.7;
 }
+.dialog-diagnostic textarea {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 12px 0;
+  padding: 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font:
+    11px ui-monospace,
+    monospace;
+}
 .shell {
   max-width: 1160px;
   margin: auto;
@@ -129,9 +143,13 @@ header {
   left: 13px;
   font-size: 23px;
 }
+.brand-title {
+  display: flex;
+  align-items: center;
+}
 .version {
-  font-size: 9px;
-  color: var(--muted);
+  font-size: 11px;
+  color: var(--text);
   letter-spacing: 1.1px;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -737,8 +755,15 @@ footer {
   .brand {
     font-size: 19px;
   }
+  .brand-title {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .version {
-    display: none;
+    font-size: 10px;
+    letter-spacing: 0;
+    margin-left: 0;
+    padding: 1px 4px;
   }
   nav {
     gap: 2px;

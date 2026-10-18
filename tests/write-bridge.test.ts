@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Runtime, Tabs } from 'webextension-polyfill';
 import type { ExecutionApproval } from '../src/operations';
 import { WRITE_PORT } from '../src/write-protocol';
+import { emptyDialogDiagnostic } from '../src/dialog-diagnostics';
 
 const { event } = vi.hoisted(() => ({
   event<Args extends unknown[]>() {
@@ -247,6 +248,36 @@ describe('dedicated explicit work tab', () => {
     ]);
     await vi.advanceTimersByTimeAsync(0);
     await open();
+  });
+  it('delivers a sanitized diagnostic even when the content reports recognition failure', async () => {
+    const diagnostic = vi.fn();
+    const result = discoverPlaylists(videoId, diagnostic);
+    const rejection = expect(result).rejects.toThrow('private failure');
+    await hydrated();
+    ports[0].reply({
+      ok: false,
+      error: 'private failure',
+      diagnostic: {
+        ...emptyDialogDiagnostic('unsupported-structure'),
+        privateText: 'SECRET',
+      },
+    });
+    await rejection;
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      emptyDialogDiagnostic('unsupported-structure'),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('SECRET');
+    expect(ports[0].port.postMessage).toHaveBeenCalledTimes(1);
+  });
+  it('provides a fixed diagnostic if a work tab cannot be opened, without leaking the exception', async () => {
+    browser.tabs.create.mockRejectedValueOnce(new Error('SECRET'));
+    const diagnostic = vi.fn();
+    await expect(discoverPlaylists(videoId, diagnostic)).rejects.toThrow(
+      'SECRET',
+    );
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      emptyDialogDiagnostic('connection-unavailable'),
+    );
   });
   it('pins a clone of the approved video and target and rechecks expiry before each call', async () => {
     const auth = approval();

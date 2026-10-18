@@ -1,6 +1,23 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.1 / M3.1 – 18.10.2026
+## Aktuell: 0.2.2 – Versionsanzeige und Dialogdiagnose
+
+Stand: 18.10.2026. Header-Version aus dem installierten WebExtension-Manifest, auch mobil sichtbar. Aufklappbarer, kopierbarer Diagnosebericht nach der vorhandenen Playlist-Abfrage, auch nach Fehlern; UI-Zustand und Identitätsbeleg getrennt. Nur Zähler, Zeilennummern, freigegebene Attributnamen und feste Gründe; keine Namen, tatsächlichen IDs, Attributwerte, DOM-Inhalte oder rohen Fehlertexte. Details und lesende Zen-Abnahme: [DIALOG-DIAGNOSTICS.md](DIALOG-DIAGNOSTICS.md).
+
+Keine neuen Schreibfunktionen, Berechtigungen, API-/Netzwerkanfragen oder Identitätsheuristiken. Sicherheitskette unverändert wirksam, keine echten Schreibtests, kein Backup-Restore. Diagnose bleibt flüchtig.
+
+Lokale Prüfungen für 0.2.2:
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check`: erfolgreich.
+- `pnpm test`: **534/534 in 16 Dateien**, einschließlich **15 Diagnose-/Datenschutzfällen** und **10 vollständigen synthetischen Integrationen**. Bestehende Schreib-Sicherheitskette weiterhin geprüft.
+- `pnpm test:ui`: **58/58 in Chromium und Firefox**, einschließlich Manifestversion, Datenschutz bei Erfolg/Fehler und Clipboard-Erfolg/-Ablehnung.
+- Produktionsbuild und `pnpm lint:extension`: erfolgreich, **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- Firefox **157.0**: echtes MV3-Add-on aus `dist` und der finalen XPI temporär installiert, keine Manifestwarnungen.
+- `pnpm package`: `artifacts/latersift-0.2.2-unsigned.xpi` erstellt; unsigniert, keine AMO-Veröffentlichung.
+
+Frühere CI-Ergebnisse unten gelten nicht als Nachweis für diesen Änderungsschritt. Keine eigenen angemeldeten YouTube-Live- oder Playlist-Schreibtests.
+
+## Historischer Stand: 0.2.1 / M3.1 – 18.10.2026
 
 Neue Sheet-Erkennung und rein lesende Playlist-Diagnose implementiert, basierend auf den vom Nutzer gemeldeten Strukturmerkmalen. Keine eigene angemeldete Live-Validierung. **Sheets sind keine Schreibziele**, selbst mit explizitem Link; ohne Link keine belegte ID. `aria-pressed` bleibt UI-Zustand, Mitgliedschaft `unknown`. Legacy-Sicherheitskette, Journal, Zustimmung und Pilotlimit bleiben wirksam.
 

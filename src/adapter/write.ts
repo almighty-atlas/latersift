@@ -1,3 +1,9 @@
+import {
+  publicAttributeNames,
+  type DialogDiagnostic,
+  type DialogFailure,
+  type UnsupportedReason,
+} from '../dialog-diagnostics';
 import type {
   MembershipEvidence,
   PlaylistChoice,
@@ -9,6 +15,7 @@ type Environment = {
   url(): string;
   wait(ms: number, signal: AbortSignal): Promise<void>;
   signal: AbortSignal;
+  onDiagnostic?(report: DialogDiagnostic): void;
 };
 
 // Deliberately isolated contracts, not a claim about every current YouTube UI.
@@ -33,7 +40,14 @@ const normalize = (text: string | null) =>
 export function createWriteAdapter(env: Environment): WriteAdapter {
   const { doc, signal } = env;
   let busy = false;
-  function fail(message: string): never {
+  let failureReason: DialogFailure = 'unsupported-structure';
+  let recognizedRoot: Element | null = null;
+  let lastDiagnostic: DialogDiagnostic | null = null;
+  function fail(
+    message: string,
+    reason: DialogFailure = 'unsupported-structure',
+  ): never {
+    failureReason = reason;
     throw new Error(`Native Save dialog: ${message}`);
   }
   function visible(el: Element): boolean {
@@ -75,16 +89,17 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     return normalize(el.textContent);
   }
   function context(videoId: string) {
-    if (signal.aborted) fail('aborted');
+    if (signal.aborted) fail('aborted', 'aborted');
     if (doc.visibilityState !== 'visible' || !doc.hasFocus())
       fail(
         'manual video tab must be visible and active; no automatic focusing',
+        'focus-lost',
       );
     let url: URL;
     try {
       url = new URL(env.url());
     } catch {
-      return fail('invalid watch URL');
+      return fail('invalid watch URL', 'video-context');
     }
     // Same validation as dom.ts parseRow; there is no exported ID validator there.
     if (
@@ -96,6 +111,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     )
       fail(
         'watch URL must identify exactly the requested 11-character video ID',
+        'video-context',
       );
     const watches = [...doc.querySelectorAll('ytd-watch-flexy')].filter(
       visible,
@@ -103,6 +119,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     if (watches.length !== 1 || watches[0].getAttribute('video-id') !== videoId)
       fail(
         'unsupported native video identity: expected one visible ytd-watch-flexy with matching video-id',
+        'video-context',
       );
     return watches[0];
   }
@@ -127,7 +144,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
             text,
           ))
       )
-        fail(`YouTube error/limit: ${text}`);
+        fail(`YouTube error/limit: ${text}`, 'youtube-error');
     }
   }
   function current(videoId: string, dialog: Element): Element {
@@ -135,7 +152,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     errors();
     const open = dialogs();
     if (!visible(dialog) || open.length !== 1 || open[0] !== dialog)
-      fail('dialog unexpectedly closed or replaced');
+      fail('dialog unexpectedly closed or replaced', 'dialog-changed');
     const roots = [...dialog.querySelectorAll(`${RENDERER}, ${SHEET}`)].filter(
       visible,
     );
@@ -143,6 +160,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     if (roots.length !== 1)
       fail(
         'Save-Dialog nicht eindeutig: genau ein Legacy-Renderer oder Sheet erwartet.',
+        roots.length > 1 ? 'ambiguous-dialog' : 'unsupported-structure',
       );
     const root = roots[0];
     if (root.matches(SHEET)) {
@@ -165,8 +183,14 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
       )
         fail(
           'Nicht unterstütztes Sheet: sichtbarer Save-to-/Speichern-Titel und Popup-Struktur fehlen oder sind mehrdeutig.',
+          !dropdown || !popup
+            ? 'sheet-popup'
+            : layouts.length !== 1
+              ? 'sheet-layout'
+              : 'sheet-header',
         );
     }
+    recognizedRoot = root;
     return root;
   }
   function click(el: Element) {
@@ -182,6 +206,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     videoId: string,
     read: () => T | undefined,
     diagnostic: string,
+    reason: DialogFailure = 'timeout',
   ): Promise<T> {
     for (let elapsed = 0; elapsed <= TIMEOUT; elapsed += INTERVAL) {
       context(videoId);
@@ -190,23 +215,27 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
       if (result !== undefined) return result;
       if (elapsed < TIMEOUT) await env.wait(INTERVAL, signal);
     }
-    return fail(`timeout (10s): ${diagnostic}`);
+    return fail(`timeout (10s): ${diagnostic}`, reason);
   }
   async function open(videoId: string): Promise<Element> {
     const watch = context(videoId);
     errors();
-    if (dialogs().length) fail('another dialog is already open');
+    if (dialogs().length)
+      fail('another dialog is already open', 'dialog-already-open');
     const buttons = [...watch.querySelectorAll(BUTTON)].filter(
       (el) => visible(el) && SAVE.test(name(el)),
     );
     if (buttons.length !== 1 || !enabled(buttons[0]))
-      fail('Save/Speichern button is missing, disabled or ambiguous');
+      fail(
+        'Save/Speichern button is missing, disabled or ambiguous',
+        'save-control',
+      );
     click(buttons[0]);
     const dialog = await poll(
       videoId,
       () => {
         const open = dialogs();
-        if (open.length > 1) fail('ambiguous dialogs');
+        if (open.length > 1) fail('ambiguous dialogs', 'ambiguous-dialog');
         return open[0];
       },
       'native Save dialog did not open',
@@ -222,6 +251,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
           : undefined;
       },
       'unsupported structure: no supported checkbox options',
+      'no-playlist-rows',
     );
     return dialog;
   }
@@ -272,6 +302,111 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     writable: boolean;
     variant: 'legacy' | 'sheet';
   };
+  function explicitIds(option: Element, selector: string): Set<string> {
+    const ids = new Set<string>();
+    for (const anchor of option.querySelectorAll('a[href]')) {
+      if (anchor.closest(selector) !== option || !visible(anchor)) continue;
+      let url: URL;
+      try {
+        url = new URL(anchor.getAttribute('href')!, 'https://www.youtube.com');
+      } catch {
+        continue;
+      }
+      if (
+        url.origin !== 'https://www.youtube.com' ||
+        url.pathname !== '/playlist' ||
+        url.searchParams.getAll('list').length !== 1
+      )
+        continue;
+      const id = url.searchParams.get('list')!;
+      if (id === 'WL' || /^PL[\w-]+$/.test(id)) ids.add(id);
+    }
+    return ids;
+  }
+  function rowTitle(
+    checkbox: Element,
+    option: Element,
+    sheet: boolean,
+  ): string {
+    // A referenced accessible name must belong to this row, not another playlist.
+    const refs = checkbox
+      .getAttribute('aria-labelledby')
+      ?.split(/\s+/)
+      .filter(Boolean);
+    const localName =
+      !sheet ||
+      !refs ||
+      refs.every((id) => {
+        const matches = [...option.querySelectorAll('[id]')].filter(
+          (el) => el.id === id,
+        );
+        return (
+          matches.length === 1 &&
+          visible(matches[0]) &&
+          [...doc.querySelectorAll('[id]')].filter((el) => el.id === id)
+            .length === 1
+        );
+      });
+    return localName ? name(checkbox) : '';
+  }
+  function selection(checkbox: Element, option: Element, sheet: boolean) {
+    const aria = checkbox.getAttribute(sheet ? 'aria-pressed' : 'aria-checked');
+    const input = checkbox.matches('input[type="checkbox"]')
+      ? (checkbox as HTMLInputElement)
+      : null;
+    let checked: boolean | null =
+      aria === 'true' ? true : aria === 'false' ? false : null;
+    if (input) {
+      checked =
+        input.indeterminate ||
+        (aria !== null && (checked === null || checked !== input.checked))
+          ? null
+          : input.checked;
+    }
+    if (sheet) {
+      // aria-pressed is UI feedback only. Any additional contradictory state invalidates it.
+      for (const el of [
+        option,
+        ...option.querySelectorAll(
+          '[aria-pressed], [aria-checked], input[type="checkbox"]',
+        ),
+      ]) {
+        for (const attr of ['aria-pressed', 'aria-checked']) {
+          const value = el.getAttribute(attr);
+          if (value !== null && value !== String(checked)) checked = null;
+        }
+        if (el.matches('input[type="checkbox"]')) {
+          const input = el as HTMLInputElement;
+          if (input.indeterminate || input.checked !== checked) checked = null;
+        }
+      }
+    }
+    const declared = sheet
+      ? [option, ...option.querySelectorAll('[aria-pressed], [aria-checked]')]
+          .flatMap((el) =>
+            ['aria-pressed', 'aria-checked'].map((attr) =>
+              el.getAttribute(attr),
+            ),
+          )
+          .filter((value) => value === 'true' || value === 'false')
+      : [
+          aria,
+          ...(input && !input.indeterminate ? [String(input.checked)] : []),
+        ].filter((value) => value === 'true' || value === 'false');
+    if (sheet)
+      for (const el of option.querySelectorAll<HTMLInputElement>(
+        'input[type="checkbox"]',
+      )) {
+        if (!el.indeterminate) declared.push(el.checked ? 'true' : 'false');
+      }
+    const kind =
+      checked !== null
+        ? 'valid'
+        : new Set(declared).size > 1
+          ? 'contradictory'
+          : 'unknown';
+    return { checked, kind } as const;
+  }
   function rows(videoId: string, dialog: Element): Row[] {
     const root = current(videoId, dialog);
     const result: Row[] = [];
@@ -307,84 +442,15 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
           'unsupported structure: checkbox option must contain exactly one checkbox',
         );
       const checkbox = boxes[0];
-      const ids = new Set<string>();
-      for (const anchor of option.querySelectorAll('a[href]')) {
-        if (anchor.closest(selector) !== option || !visible(anchor)) continue;
-        let url: URL;
-        try {
-          url = new URL(
-            anchor.getAttribute('href')!,
-            'https://www.youtube.com',
-          );
-        } catch {
-          continue;
-        }
-        if (
-          url.origin !== 'https://www.youtube.com' ||
-          url.pathname !== '/playlist' ||
-          url.searchParams.getAll('list').length !== 1
-        )
-          continue;
-        const id = url.searchParams.get('list')!;
-        if (id === 'WL' || /^PL[\w-]+$/.test(id)) ids.add(id);
-      }
+      const ids = explicitIds(option, selector);
       if (ids.size > 1)
-        fail('ambiguous explicit playlist IDs within one option');
-      // A referenced accessible name must belong to this row, not another playlist.
-      const refs = checkbox
-        .getAttribute('aria-labelledby')
-        ?.split(/\s+/)
-        .filter(Boolean);
-      const localName =
-        !sheet ||
-        !refs ||
-        refs.every((id) => {
-          const matches = [...option.querySelectorAll('[id]')].filter(
-            (el) => el.id === id,
-          );
-          return (
-            matches.length === 1 &&
-            visible(matches[0]) &&
-            [...doc.querySelectorAll('[id]')].filter((el) => el.id === id)
-              .length === 1
-          );
-        });
-      const title = localName ? name(checkbox) : '';
+        fail(
+          'ambiguous explicit playlist IDs within one option',
+          'ambiguous-identity',
+        );
+      const title = rowTitle(checkbox, option, sheet);
       const id = [...ids][0] || null;
-      const aria = checkbox.getAttribute(
-        sheet ? 'aria-pressed' : 'aria-checked',
-      );
-      const input = checkbox.matches('input[type="checkbox"]')
-        ? (checkbox as HTMLInputElement)
-        : null;
-      let checked: boolean | null =
-        aria === 'true' ? true : aria === 'false' ? false : null;
-      if (input) {
-        checked =
-          input.indeterminate ||
-          (aria !== null && (checked === null || checked !== input.checked))
-            ? null
-            : input.checked;
-      }
-      if (sheet) {
-        // aria-pressed is UI feedback only. Any additional contradictory state invalidates it.
-        for (const el of [
-          option,
-          ...option.querySelectorAll(
-            '[aria-pressed], [aria-checked], input[type="checkbox"]',
-          ),
-        ]) {
-          for (const attr of ['aria-pressed', 'aria-checked']) {
-            const value = el.getAttribute(attr);
-            if (value !== null && value !== String(checked)) checked = null;
-          }
-          if (el.matches('input[type="checkbox"]')) {
-            const input = el as HTMLInputElement;
-            if (input.indeterminate || input.checked !== checked)
-              checked = null;
-          }
-        }
-      }
+      const { checked } = selection(checkbox, option, sheet);
       result.push({
         option,
         checkbox,
@@ -404,8 +470,130 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     }
     const ids = result.map((row) => row.id).filter((id) => id !== null);
     if (new Set(ids).size !== ids.length)
-      fail('duplicate/ambiguous playlist ID');
+      fail('duplicate/ambiguous playlist ID', 'ambiguous-identity');
     return result;
+  }
+  function diagnose(reason: DialogFailure | null): DialogDiagnostic {
+    const roots = [...doc.querySelectorAll(`${RENDERER}, ${SHEET}`)].filter(
+      visible,
+    );
+    const verified =
+      roots.length === 1 &&
+      roots[0] === recognizedRoot &&
+      dialogs().length === 1;
+    const boundaries = roots.length ? roots : dialogs();
+    const options = [
+      ...doc.querySelectorAll(`${OPTION}, ${SHEET_OPTION}`),
+    ].filter(
+      (option) =>
+        visible(option) &&
+        (roots.length
+          ? roots.includes(option.closest(`${RENDERER}, ${SHEET}`)!)
+          : boundaries.some((root) => root.contains(option))),
+    );
+    const observations = options.map((option) => {
+      const sheet = option.matches(SHEET_OPTION);
+      const selector = sheet ? SHEET_OPTION : OPTION;
+      const boxes = [
+        ...option.querySelectorAll(
+          sheet ? 'button[role="menuitem"]' : CHECKBOX,
+        ),
+      ].filter((box) => visible(box) && box.closest(selector) === option);
+      const items = [
+        ...option.querySelectorAll('yt-list-item-view-model'),
+      ].filter(visible);
+      const structure =
+        boxes.length === 1 &&
+        !option.parentElement?.closest(selector) &&
+        (!sheet || (items.length === 1 && items[0].contains(boxes[0])));
+      const state =
+        boxes.length === 1
+          ? selection(boxes[0], option, sheet).kind
+          : 'unknown';
+      return {
+        option,
+        sheet,
+        boxes,
+        structure,
+        state,
+        ids: explicitIds(option, selector),
+      };
+    });
+    const frequencies = new Map<string, number>();
+    for (const row of observations)
+      for (const id of row.ids)
+        frequencies.set(id, (frequencies.get(id) || 0) + 1);
+    const incomplete = observations.some((row) => row.ids.size !== 1);
+    const rows: DialogDiagnostic['rows'] = observations.map((row, index) => {
+      const ambiguous =
+        row.ids.size > 1 || [...row.ids].some((id) => frequencies.get(id)! > 1);
+      const identity = ambiguous
+        ? 'ambiguous'
+        : verified && row.structure && row.ids.size === 1
+          ? 'explicit-link'
+          : 'unverified';
+      const reasons: UnsupportedReason[] = [];
+      if (!verified) reasons.push('unverified-dialog');
+      if (!row.structure) reasons.push('unsupported-row');
+      if (row.sheet) reasons.push('sheet-readonly');
+      if (identity !== 'explicit-link')
+        reasons.push(ambiguous ? 'ambiguous-identity' : 'unproven-identity');
+      if (row.state !== 'valid')
+        reasons.push(
+          row.state === 'contradictory'
+            ? 'conflicting-selection'
+            : 'unknown-selection',
+        );
+      if (!enabled(row.option) || row.boxes.some((box) => !enabled(box)))
+        reasons.push('disabled-control');
+      if (
+        row.boxes.length === 1 &&
+        !rowTitle(row.boxes[0], row.option, row.sheet)
+      )
+        reasons.push('missing-name');
+      if (!row.sheet && incomplete) reasons.push('incomplete-id-map');
+      return {
+        index: index + 1,
+        uiState: row.state,
+        identity,
+        unsupportedReasons: reasons,
+      };
+    });
+    const scopes = boundaries.flatMap((root) => [
+      root,
+      ...root.querySelectorAll('*'),
+    ]);
+    return {
+      schemaVersion: 1,
+      variant: verified
+        ? roots[0].matches(SHEET)
+          ? 'sheet'
+          : 'legacy'
+        : 'unsupported',
+      playlistRows: rows.length,
+      selectionStates: {
+        valid: rows.filter((row) => row.uiState === 'valid').length,
+        unknown: rows.filter((row) => row.uiState === 'unknown').length,
+        contradictory: rows.filter((row) => row.uiState === 'contradictory')
+          .length,
+      },
+      provenPlaylistIds: rows.filter((row) => row.identity === 'explicit-link')
+        .length,
+      unidentifiedRows: rows.filter((row) => row.identity !== 'explicit-link')
+        .length,
+      publicAttributeNames: publicAttributeNames.filter((attr) =>
+        scopes.some((el) => el.hasAttribute(attr)),
+      ),
+      failureReason: reason,
+      rows,
+    };
+  }
+  function publishFailure(reason: DialogFailure) {
+    env.onDiagnostic?.(
+      lastDiagnostic
+        ? { ...lastDiagnostic, failureReason: reason }
+        : diagnose(reason),
+    );
   }
   function target(
     videoId: string,
@@ -488,53 +676,66 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     }
   }
   return {
-    getAvailablePlaylists: (videoId) =>
-      session(
-        videoId,
-        async (dialog): Promise<PlaylistChoice[]> => {
-          const options = rows(videoId, dialog);
-          // Discovery may show unidentified entries, but must not relax the legacy
-          // archive preflight that previously rejected any incomplete ID mapping.
-          const completeIdentity = options.every((row) => row.id !== null);
-          return options.map((row) => ({
-            id: row.id,
-            title: row.title,
-            writable: row.writable && completeIdentity,
-            checked: row.checked,
-            identity: row.id ? 'explicit-link' : 'unverified',
-            variant: row.variant,
-            ...(!row.id
-              ? {
-                  diagnostic:
-                    'Keine belegte Playlist-ID: Namen und Auswahlzustand reichen nicht aus.',
-                }
-              : row.variant === 'sheet'
+    getAvailablePlaylists: async (videoId) => {
+      failureReason = 'unsupported-structure';
+      recognizedRoot = null;
+      lastDiagnostic = null;
+      try {
+        return await session(
+          videoId,
+          async (dialog): Promise<PlaylistChoice[]> => {
+            const options = rows(videoId, dialog);
+            lastDiagnostic = diagnose(null);
+            env.onDiagnostic?.(lastDiagnostic);
+            // Discovery may show unidentified entries, but must not relax the legacy
+            // archive preflight that previously rejected any incomplete ID mapping.
+            const completeIdentity = options.every((row) => row.id !== null);
+            return options.map((row) => ({
+              id: row.id,
+              title: row.title,
+              writable: row.writable && completeIdentity,
+              checked: row.checked,
+              identity: row.id ? 'explicit-link' : 'unverified',
+              variant: row.variant,
+              ...(!row.id
                 ? {
                     diagnostic:
-                      'ID über Zeilenlink belegt; unabhängige Mitgliedschaftsprüfung für Sheets fehlt. Schreiben gesperrt.',
+                      'Keine belegte Playlist-ID: Namen und Auswahlzustand reichen nicht aus.',
                   }
-                : !completeIdentity
+                : row.variant === 'sheet'
                   ? {
                       diagnostic:
-                        'Dialog enthält Einträge ohne belegte ID. Schreibziele bleiben gesperrt.',
+                        'ID über Zeilenlink belegt; unabhängige Mitgliedschaftsprüfung für Sheets fehlt. Schreiben gesperrt.',
                     }
-                  : {}),
-            ...(row.checked === null
-              ? {
-                  diagnostic:
-                    'Auswahlzustand fehlt oder ist widersprüchlich. Schreiben gesperrt.',
-                }
-              : {}),
-            ...(!row.title
-              ? {
-                  diagnostic:
-                    'Playlist-Name fehlt oder ist nicht eindeutig zugeordnet. Schreiben gesperrt.',
-                }
-              : {}),
-          }));
-        },
-        true,
-      ),
+                  : !completeIdentity
+                    ? {
+                        diagnostic:
+                          'Dialog enthält Einträge ohne belegte ID. Schreibziele bleiben gesperrt.',
+                      }
+                    : {}),
+              ...(row.checked === null
+                ? {
+                    diagnostic:
+                      'Auswahlzustand fehlt oder ist widersprüchlich. Schreiben gesperrt.',
+                  }
+                : {}),
+              ...(!row.title
+                ? {
+                    diagnostic:
+                      'Playlist-Name fehlt oder ist nicht eindeutig zugeordnet. Schreiben gesperrt.',
+                  }
+                : {}),
+            }));
+          },
+          true,
+        );
+      } catch (error) {
+        // Preserve the last observation if closing/navigation failed after the read.
+        if (signal.aborted) failureReason = 'aborted';
+        publishFailure(failureReason);
+        throw error;
+      }
+    },
     getPlaylistMembership: async (videoId, id) => {
       playlistId(id);
       return session(videoId, async (dialog): Promise<MembershipEvidence> => {

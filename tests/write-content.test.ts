@@ -41,6 +41,7 @@ import { createWriteAdapter } from '../src/adapter/write';
 import { createYouTubeAdapter } from '../src/adapter/youtube';
 import { createPlaylistScroller } from '../src/adapter/scroll';
 import { installWriteChannel } from '../src/write-content';
+import { emptyDialogDiagnostic } from '../src/dialog-diagnostics';
 import { AUTHORIZE_MUTATION, WRITE_PORT } from '../src/write-protocol';
 
 const videoId = 'abcdefghijk';
@@ -224,6 +225,9 @@ describe('content write boundary without real YouTube DOM', () => {
       expect(channel.port.postMessage).toHaveBeenNthCalledWith(1, {
         ok: true,
         result: expect.anything(),
+        ...(method === 'playlists'
+          ? { diagnostic: emptyDialogDiagnostic('diagnosis-unavailable') }
+          : {}),
       });
       await channel.send(request('remove'));
       expect(channel.port.postMessage).toHaveBeenLastCalledWith({
@@ -233,6 +237,34 @@ describe('content write boundary without real YouTube DOM', () => {
       expect(adapter.addToPlaylist).not.toHaveBeenCalled();
       expect(adapter.removeFromWatchLater).not.toHaveBeenCalled();
       expect(active).toBeNull();
+    },
+  );
+  it.each([false, true])(
+    'transports only sanitized diagnostics on playlist discovery (failure=%s)',
+    async (failure) => {
+      install();
+      adapter.getAvailablePlaylists.mockImplementation(async () => {
+        env.onDiagnostic?.({
+          ...emptyDialogDiagnostic('unsupported-structure'),
+          privateText: 'SECRET-NAME-AND-TOKEN',
+        } as unknown as Parameters<NonNullable<typeof env.onDiagnostic>>[0]);
+        if (failure) throw new Error('SECRET-NAME-AND-TOKEN');
+        return [];
+      });
+      const channel = connect();
+      await channel.send({ type: 'request', method: 'playlists', videoId });
+      const response = vi.mocked(channel.port.postMessage).mock.calls[0][0] as {
+        ok: boolean;
+        diagnostic: unknown;
+      };
+      expect(response.ok).toBe(!failure);
+      expect(response.diagnostic).toEqual(
+        emptyDialogDiagnostic('unsupported-structure'),
+      );
+      expect(JSON.stringify(response.diagnostic)).not.toContain('SECRET');
+      expect(browser.runtime.sendMessage).not.toHaveBeenCalled();
+      expect(adapter.addToPlaylist).not.toHaveBeenCalled();
+      expect(adapter.removeFromWatchLater).not.toHaveBeenCalled();
     },
   );
   it.each(['wrong-video', 'wrong-target', 'expired'])(

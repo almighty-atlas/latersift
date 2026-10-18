@@ -434,60 +434,200 @@ test('mobile layout fits and dialog traps focus', async ({
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
-// UI transport fixture only. Real DOM/content/bridge coverage lives in write-flow.test.ts.
-test('shows duplicate unidentified playlists as observations without offering them as write targets', async ({
+// UI transport fixtures only; real DOM/content/bridge coverage lives in write-flow.test.ts.
+async function fakeDiscovery(page: Page, fail = false, denyCopy = false) {
+  await page.addInitScript(
+    ({ fail, denyCopy }) => {
+      const id = 'synthetic-ui@latersift';
+      let url = '';
+      const choices = Array.from({ length: 16 }, (_, i) => ({
+        id: null,
+        title: i < 2 ? 'Same playlist name' : `Fixture playlist ${i}`,
+        checked: i === 2 ? null : i % 2 === 0,
+        identity: 'unverified',
+        variant: 'sheet',
+        writable: false,
+        diagnostic:
+          'Keine belegte Playlist-ID: Namen und Auswahlzustand reichen nicht aus.',
+      }));
+      const diagnostic = {
+        schemaVersion: 1,
+        variant: fail ? 'unsupported' : 'sheet',
+        playlistRows: 16,
+        selectionStates: { valid: 14, unknown: 1, contradictory: 1 },
+        provenPlaylistIds: 0,
+        unidentifiedRows: 16,
+        publicAttributeNames: [
+          'aria-pressed',
+          'data-playlist-id',
+          'data-private-name',
+        ],
+        failureReason: fail ? 'unsupported-structure' : null,
+        rows: Array.from({ length: 16 }, (_, i) => ({
+          index: i + 1,
+          uiState: i === 0 ? 'unknown' : i === 1 ? 'contradictory' : 'valid',
+          identity: 'unverified',
+          unsupportedReasons: ['sheet-readonly', 'unproven-identity'],
+        })),
+        privateText: 'PRIVATE_WIRE_TEXT',
+      };
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            if (denyCopy) throw new Error('denied');
+            Object.assign(globalThis, { copiedDiagnostic: text });
+          },
+        },
+      });
+      const api = {
+        runtime: { id, getManifest: () => ({ version: '9.8.7' }) },
+        tabs: {
+          create: async (options: { url: string }) => {
+            url = options.url;
+            return { id: 123 };
+          },
+          get: async () => ({
+            id: 123,
+            windowId: 456,
+            active: true,
+            status: 'complete',
+            url,
+          }),
+          connect: () => {
+            let reply: (message: unknown) => void;
+            return {
+              onMessage: {
+                addListener: (listener: typeof reply) => {
+                  reply = listener;
+                },
+              },
+              onDisconnect: { addListener: () => {} },
+              disconnect: () => {},
+              postMessage: (request: { method: string }) => {
+                if (request.method !== 'playlists')
+                  throw new Error('Fixture forbids writes');
+                queueMicrotask(() =>
+                  reply(
+                    fail
+                      ? { ok: false, error: 'PRIVATE_ERROR_NAME', diagnostic }
+                      : { ok: true, result: choices, diagnostic },
+                  ),
+                );
+              },
+            };
+          },
+        },
+        windows: { get: async () => ({ focused: true }) },
+      };
+      Object.assign(globalThis, { chrome: api, browser: api });
+    },
+    { fail, denyCopy },
+  );
+}
+
+test('header displays the installed manifest version on desktop and mobile', async ({
+  page,
+}) => {
+  await fakeDiscovery(page);
+  await page.goto('/');
+  await expect(page.locator('header .version')).toHaveText('v9.8.7');
+  await expect(page.locator('header .version')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('header .version')).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test('header is honest when no WebExtension manifest API is available', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await expect(page.locator('header .version')).toHaveText('Version unbekannt');
+});
+
+for (const fail of [false, true])
+  test(`read-only discovery shows a copyable sanitized diagnostic (failure=${fail})`, async ({
+    page,
+  }) => {
+    await seed(page);
+    await fakeDiscovery(page, fail);
+    await page.reload();
+    await page.getByRole('button', { name: 'Runde starten' }).click();
+    await page.getByRole('button', { name: 'Runde anpassen' }).click();
+    await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
+    await page
+      .getByRole('button', { name: 'Playlists aus YouTube laden' })
+      .click();
+
+    if (!fail) {
+      const list = page.getByRole('list', {
+        name: 'Erkannte YouTube-Playlists',
+      });
+      await expect(list.getByRole('listitem')).toHaveCount(16);
+      await expect(
+        list.getByText('Same playlist name', { exact: true }),
+      ).toHaveCount(2);
+      await expect(
+        list.getByText('Identität unbestätigt', { exact: false }),
+      ).toHaveCount(16);
+      await expect(
+        list.getByText('Auswahl unbekannt', { exact: false }),
+      ).toHaveCount(1);
+      await expect(page.getByLabel('Schreibbare YouTube-Playlist')).toHaveCount(
+        0,
+      );
+      await expect(
+        page.getByLabel('YouTube-Playlist-URL oder PL…-ID'),
+      ).toHaveValue('PL1234567890123456');
+    } else {
+      await expect(
+        page.getByRole('list', { name: 'Erkannte YouTube-Playlists' }),
+      ).toHaveCount(0);
+    }
+    const textarea = page.getByRole('textbox', {
+      name: 'Bereinigte YouTube-Dialogdiagnose',
+    });
+    await expect(textarea).not.toBeVisible();
+    await page
+      .getByText('Technische YouTube-Dialogdiagnose', { exact: true })
+      .click();
+    await expect(textarea).toBeVisible();
+    const text = await textarea.inputValue();
+    const report = JSON.parse(text);
+    expect(report).toMatchObject({
+      variant: fail ? 'unsupported' : 'sheet',
+      playlistRows: 16,
+      provenPlaylistIds: 0,
+      unidentifiedRows: 16,
+      selectionStates: { valid: 14, unknown: 1, contradictory: 1 },
+    });
+    expect(report.publicAttributeNames).toEqual([
+      'aria-pressed',
+      'data-playlist-id',
+    ]);
+    expect(text).not.toMatch(
+      /PRIVATE_|Same playlist name|Fixture playlist|00000000000|PL1234567890123456|youtube\.com/,
+    );
+    await page
+      .getByRole('button', { name: 'Diagnose kopieren', exact: true })
+      .click();
+    await expect(page.getByRole('dialog').getByRole('status')).toContainText(
+      'Bereinigte Diagnose kopiert.',
+    );
+    expect(
+      await page.evaluate(() => Reflect.get(globalThis, 'copiedDiagnostic')),
+    ).toBe(text);
+  });
+
+test('clipboard denial keeps the sanitized report available for manual copying', async ({
   page,
 }) => {
   await seed(page);
-  await page.addInitScript(() => {
-    const id = 'synthetic-ui@latersift';
-    let url = '';
-    const choices = Array.from({ length: 16 }, (_, i) => ({
-      id: null,
-      title: i < 2 ? 'Same playlist name' : `Fixture playlist ${i}`,
-      checked: i === 2 ? null : i % 2 === 0,
-      identity: 'unverified',
-      variant: 'sheet',
-      writable: false,
-      diagnostic:
-        'Keine belegte Playlist-ID: Namen und Auswahlzustand reichen nicht aus.',
-    }));
-    const api = {
-      runtime: { id },
-      tabs: {
-        create: async (options: { url: string }) => {
-          url = options.url;
-          return { id: 123 };
-        },
-        get: async () => ({
-          id: 123,
-          windowId: 456,
-          active: true,
-          status: 'complete',
-          url,
-        }),
-        connect: () => {
-          let reply: (message: unknown) => void;
-          return {
-            onMessage: {
-              addListener: (listener: typeof reply) => {
-                reply = listener;
-              },
-            },
-            onDisconnect: { addListener: () => {} },
-            disconnect: () => {},
-            postMessage: (request: { method: string }) => {
-              if (request.method !== 'playlists')
-                throw new Error('Fixture forbids writes');
-              queueMicrotask(() => reply({ ok: true, result: choices }));
-            },
-          };
-        },
-      },
-      windows: { get: async () => ({ focused: true }) },
-    };
-    Object.assign(globalThis, { chrome: api, browser: api });
-  });
+  await fakeDiscovery(page, true, true);
   await page.reload();
   await page.getByRole('button', { name: 'Runde starten' }).click();
   await page.getByRole('button', { name: 'Runde anpassen' }).click();
@@ -495,19 +635,17 @@ test('shows duplicate unidentified playlists as observations without offering th
   await page
     .getByRole('button', { name: 'Playlists aus YouTube laden' })
     .click();
-  const list = page.getByRole('list', { name: 'Erkannte YouTube-Playlists' });
-  await expect(list.getByRole('listitem')).toHaveCount(16);
-  await expect(
-    list.getByText('Same playlist name', { exact: true }),
-  ).toHaveCount(2);
-  await expect(
-    list.getByText('Identität unbestätigt', { exact: false }),
-  ).toHaveCount(16);
-  await expect(
-    list.getByText('Auswahl unbekannt', { exact: false }),
-  ).toHaveCount(1);
-  await expect(page.getByLabel('Schreibbare YouTube-Playlist')).toHaveCount(0);
-  await expect(page.getByLabel('YouTube-Playlist-URL oder PL…-ID')).toHaveValue(
-    'PL1234567890123456',
+
+  await page
+    .getByText('Technische YouTube-Dialogdiagnose', { exact: true })
+    .click();
+  await page
+    .getByRole('button', { name: 'Diagnose kopieren', exact: true })
+    .click();
+  await expect(page.getByRole('dialog').getByRole('status')).toContainText(
+    'Diagnose markieren und manuell kopieren',
   );
+  await expect(
+    page.getByRole('textbox', { name: 'Bereinigte YouTube-Dialogdiagnose' }),
+  ).toBeVisible();
 });

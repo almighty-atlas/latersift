@@ -1,3 +1,8 @@
+import {
+  emptyDialogDiagnostic,
+  sanitizeDialogDiagnostic,
+  type DialogDiagnostic,
+} from './dialog-diagnostics';
 import type { Runtime } from 'webextension-polyfill';
 import type {
   ExecutionApproval,
@@ -32,7 +37,11 @@ async function writerLock(): Promise<() => void> {
       .catch(reject);
   });
 }
-async function workTab(videoId: string, approval?: ExecutionApproval) {
+async function workTab(
+  videoId: string,
+  approval?: ExecutionApproval,
+  onDiagnostic?: (report: DialogDiagnostic) => void,
+) {
   if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Ungültige Video-ID.');
   if (approval) approvedAction(approval, videoId);
   const { default: browser } = await import('webextension-polyfill');
@@ -167,6 +176,12 @@ async function workTab(videoId: string, approval?: ExecutionApproval) {
         port.onMessage.addListener((message: unknown) => {
           if (!message || typeof message !== 'object' || !('ok' in message))
             return;
+          if (request.method === 'playlists' && onDiagnostic)
+            onDiagnostic(
+              sanitizeDialogDiagnostic(
+                'diagnostic' in message ? message.diagnostic : undefined,
+              ),
+            );
           if (message.ok === true && 'result' in message)
             finish(undefined, message.result as T);
           else
@@ -246,11 +261,21 @@ export function createWriteBridge(approval: ExecutionApproval) {
 }
 export async function discoverPlaylists(
   videoId: string,
+  onDiagnostic?: (report: DialogDiagnostic) => void,
 ): Promise<PlaylistChoice[]> {
-  const bridge = await workTab(videoId);
+  let reported = false;
+  const report = (diagnostic: DialogDiagnostic) => {
+    reported = true;
+    onDiagnostic?.(diagnostic);
+  };
+  let bridge: Awaited<ReturnType<typeof workTab>> | undefined;
   try {
+    bridge = await workTab(videoId, undefined, report);
     return await bridge.adapter.getAvailablePlaylists(videoId);
+  } catch (error) {
+    if (!reported) report(emptyDialogDiagnostic('connection-unavailable'));
+    throw error;
   } finally {
-    bridge.close();
+    bridge?.close();
   }
 }

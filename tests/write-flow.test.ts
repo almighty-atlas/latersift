@@ -90,6 +90,7 @@ let optimisticOnly: boolean;
 let disconnectAfterClick: boolean;
 let unknownWL: boolean;
 let useSheet: boolean;
+let invalidSheet: boolean;
 let disconnectPort: () => void;
 let clicks: string[];
 let requests: WriteRequest[];
@@ -117,7 +118,10 @@ function rebuildDocument() {
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
     if (useSheet) {
-      dialog.innerHTML = saveSheet();
+      dialog.innerHTML = saveSheet(
+        undefined,
+        invalidSheet ? 'Share' : 'Save to…',
+      );
       dialog.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') dialog.remove();
       });
@@ -295,6 +299,7 @@ beforeEach(async () => {
   disconnectAfterClick = false;
   unknownWL = false;
   useSheet = false;
+  invalidSheet = false;
   clicks = [];
   requests = [];
   trace = [];
@@ -577,7 +582,18 @@ describe('full synthetic write flow — real storage, authority, bridge, content
 describe('new sheet through the complete real safety chain — synthetic only', () => {
   it('returns 16 unidentified read-only observations through content and bridge without permits', async () => {
     useSheet = true;
-    const choices = await drive(discoverPlaylists(VIDEO));
+    const diagnostic = vi.fn();
+    const choices = await drive(discoverPlaylists(VIDEO, diagnostic));
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        variant: 'sheet',
+        playlistRows: 16,
+        provenPlaylistIds: 0,
+        unidentifiedRows: 16,
+        selectionStates: { valid: 16, unknown: 0, contradictory: 0 },
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain(VIDEO);
     expect(choices).toHaveLength(16);
     expect(
       choices.every(
@@ -589,6 +605,29 @@ describe('new sheet through the complete real safety chain — synthetic only', 
     expect(permits).toEqual([]);
     expect(requests.map((r) => r.method)).toEqual(['playlists']);
     expect(document.querySelector('yt-sheet-view-model')).not.toBeNull();
+  });
+  it('transports a real failed-recognition diagnostic without IDs, names or mutation authority', async () => {
+    useSheet = true;
+    invalidSheet = true;
+    const diagnostic = vi.fn();
+    await expect(drive(discoverPlaylists(VIDEO, diagnostic))).rejects.toThrow(
+      /Nicht unterstütztes Sheet/,
+    );
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        variant: 'unsupported',
+        playlistRows: 16,
+        provenPlaylistIds: 0,
+        unidentifiedRows: 16,
+        failureReason: 'sheet-header',
+      }),
+    );
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toMatch(
+      new RegExp(`${VIDEO}|Watch later|Synthetic archive`),
+    );
+    expect(clicks).toEqual([]);
+    expect(permits).toEqual([]);
+    expect(requests.map((r) => r.method)).toEqual(['playlists']);
   });
   it.each(['remove', 'archive'] as const)(
     'blocks approved %s at the fresh membership preflight without a permit or playlist click',

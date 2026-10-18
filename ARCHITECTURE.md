@@ -1,6 +1,8 @@
 # Architektur
 
-**0.2.1 / M3.1:** Neue Save-Sheets sind rein lesend unterstützt; Identitäten ohne Zeilenlink bleiben unbestätigt, alle Sheet-Mutationen gesperrt. [Vertrag und Identitätsbewertung](docs/M3.1.md).
+**0.2.2 / M3.1:** Neue Save-Sheets sind rein lesend unterstützt; Identitäten ohne Zeilenlink bleiben unbestätigt, alle Sheet-Mutationen gesperrt. [Vertrag und Identitätsbewertung](docs/M3.1.md).
+
+Die Header-Version stammt aus dem installierten WebExtension-Manifest. Die rein lesende Playlist-Abfrage ergänzt ihre bestehende Port-Antwort um einen bereinigten, flüchtigen Diagnosebericht, auch bei Adapterfehlern. Ein optionaler Adapter-Callback liefert ihn vor dem Legacy-Dialogschluss; die Bridge reicht ihn an die App weiter. `src/dialog-diagnostics.ts` beschränkt Felder, Attributnamen und Fehler-/Sperrgründe auf ein festes Schema, ohne Namen, IDs, Attributwerte, DOM oder rohe Fehlertexte. Keine zusätzlichen Nachrichten, Netzwerke, Berechtigungen oder Datenbankschemata. [Vertrag und Zen-Test](docs/DIALOG-DIAGNOSTICS.md).
 
 **Bisheriger Stand:** M1 ist nutzerbestätigt (Live-Import 4.926/4.926, `complete`, vollständiges JSON lokal gespeichert, nachdem „Nicht verfügbare Videos anzeigen“ die fehlenden 240 sichtbar machte). Kein eigener automatisierter Live-Nachweis des Agenten. M3 ist implementiert, aber **experimentell, vorläufig und noch nicht live abgenommen**; tatsächliche YouTube-Kompatibilität bleibt offen.
 

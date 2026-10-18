@@ -1,6 +1,6 @@
 # Tests / Abnahme
 
-**Aktuell: 0.2.1 / M3.1.** Zuerst ausschließlich den [rein lesenden Zen-Test](M3.1.md#manueller-zen-test--ausschließlich-lesend) durchführen. Keine Freigabe für echte Schreibtests. Aktuelle Prüfergebnisse: [STATUS.md](STATUS.md). Die folgenden 0.2.0-Ergebnisse sind historisch; die beschriebenen Schreibpiloten benötigen eine gesonderte Nutzerfreigabe.
+**Aktuell: 0.2.2 / M3.1.** Versionsanzeige und integrierte bereinigte Diagnose gemäß [Zen-Test](DIALOG-DIAGNOSTICS.md) mitprüfen. Zuerst ausschließlich den [rein lesenden Zen-Test](M3.1.md#manueller-zen-test--ausschließlich-lesend) durchführen. Keine Freigabe für echte Schreibtests. Aktuelle Prüfergebnisse: [STATUS.md](STATUS.md). Die folgenden 0.2.0-Ergebnisse sind historisch; die beschriebenen Schreibpiloten benötigen eine gesonderte Nutzerfreigabe.
 
 ## Evidenz und aktueller Prüfstand
 
@@ -69,7 +69,7 @@ Die Hard-Reload-/Cache-Umgehung der realen Bridge und der angemeldete native Dia
 ## Installation und Upgrade prüfen
 
 1. **Vor Upgrade bestehenden vollständigen JSON-Export lokal sichern**, nicht öffentlich hochladen. Profil und ID `latersift@almighty-atlas.github.io` beibehalten.
-2. Aktuell 0.2.1 bauen und `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.1-unsigned.xpi` temporär über `about:debugging#/runtime/this-firefox` laden. Paket und Manifest müssen beide 0.2.1 tragen. Keine Signierung voraussetzen.
+2. Aktuell 0.2.2 bauen und `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.2-unsigned.xpi` temporär über `about:debugging#/runtime/this-firefox` laden. Paket und Manifest müssen beide 0.2.2 tragen. Keine Signierung voraussetzen.
 3. Bestehende YouTube-Tabs neu laden. Rechte vergleichen: weiterhin nur `unlimitedStorage` und `https://www.youtube.com/*`, keine neuen Privilegien, kein `cookies`/`tabs`-Vollzugriff.
 4. Mit erhaltenem Extension-Speicher prüfen: Library-Schema 3, IndexedDB `latersift` weiterhin Strukturversion 1 und dieselben Stores `state`/`snapshots`; alte Entscheidungen und vollständige Snapshots unverändert vorhanden. Kein destruktives Zurücksetzen zum Beheben einer Migration.
 5. Start darf weder Scan noch Schreibjob auslösen. Vorher laufende Scans müssen `interrupted`, laufende Operationsschritte/Entscheidungen/Durchläufe `unknown` sein.

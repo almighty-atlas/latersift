@@ -4,7 +4,7 @@
 
 Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später ansehen“. TypeScript strict, Svelte 5, Firefox Manifest V3, IndexedDB, MIT. Kein Server, keine Telemetrie, keine KI.
 
-> **0.2.1 / M3.1: neues Save-Sheet rein lesend, Schreibaktionen dort gesperrt.** [Dialogunterstützung, Identitätsbewertung und Zen-Test](docs/M3.1.md).
+> **0.2.2: Manifestversion im Header und integrierte bereinigte YouTube-Dialogdiagnose.** [Diagnose kopieren und Zen-Test](docs/DIALOG-DIAGNOSTICS.md). Neue Save-Sheets bleiben rein lesend, Schreibaktionen dort gesperrt. [Dialogunterstützung, Identitätsbewertung und Zen-Test](docs/M3.1.md).
 
 > **M1/M3-Einordnung:** M1 nutzerbestätigt, M3 experimentell und vorläufig. Der Nutzer hat den vollständigen Live-Import **4.926/4.926, `complete`**, einschließlich lokal gespeichertem vollständigem JSON bestätigt. YouTubes „Nicht verfügbare Videos anzeigen“ machte die zuvor fehlenden 240 Einträge sichtbar. Das ist **Nutzerbestätigung, kein eigener automatisierter Live-Nachweis des Agenten**. Der vorhandene M3-Schreibpilot ist noch nicht live abgenommen; reale YouTube-Kompatibilität und ein robust fertiges schreibendes MVP werden nicht behauptet.
 
@@ -21,7 +21,7 @@ Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später a
 
 Details: [Status / Evidenz](docs/STATUS.md), [Architektur](ARCHITECTURE.md), [Testanleitung und erster Live-Pilot](docs/TESTING.md).
 
-## Installation / Upgrade auf 0.2.1
+## Installation / Upgrade auf 0.2.2
 
 Desktop-Firefox oder Zen ab Gecko **142**, Node.js 22.12+ oder 24, pnpm 11:
 
@@ -34,7 +34,7 @@ pnpm package
 ```
 
 1. **Vor dem Upgrade den bestehenden JSON-Export lokal sichern.** Dieselbe Erweiterungs-ID `latersift@almighty-atlas.github.io` und dasselbe Browserprofil beibehalten. Library-Dokumente werden auf Schema 3 migriert; die IndexedDB-Struktur bleibt Version 1, bestehende Entscheidungen und vollständige Snapshots bleiben erhalten. Das ersetzt keine Sicherung gegen Entfernen/Profilverlust.
-2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.1-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Die finale unsignierte XPI wurde gebaut und ebenso wie `dist` erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert.
+2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.2-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Die finale unsignierte XPI wurde gebaut und ebenso wie `dist` erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert.
 3. Zugriff auf `https://www.youtube.com` erlauben; bereits offene YouTube-Tabs nach dem Update neu laden. **Keine neuen Berechtigungen:** weiterhin nur `unlimitedStorage` und die bestehende YouTube-Host-Berechtigung.
 4. Erweiterungssymbol → LaterSift. Vorgeschlagenes Kürzel: `Alt+Shift+L` (in Zen manuell prüfen/anpassen).
 5. Für einen Import im eigenen Konto `https://www.youtube.com/playlist?list=WL` öffnen, im Importdialog Tabs aktualisieren/auswählen und „Read-only-Import neu starten“. YouTube geöffnet und möglichst aktiv lassen, nicht parallel navigieren, umsortieren oder bearbeiten. Fehlende Einträge ggf. selbst mit YouTubes „Nicht verfügbare Videos anzeigen“ einblenden; der Scanner bedient dieses Menü nicht.
@@ -79,7 +79,7 @@ pnpm lint:extension
 pnpm exec playwright install --with-deps chromium firefox
 pnpm test:ui                # lokale Fixtures, keine Live-Mutationen
 pnpm test:firefox-extension # frisches Profil, Installations-Smoke-Test
-pnpm package                # artifacts/latersift-0.2.1-unsigned.xpi
+pnpm package                # artifacts/latersift-0.2.2-unsigned.xpi
 ```
 
 Historische lokale Prüffolge für 0.2.0 (aktuelle M3.1-Ergebnisse: [STATUS.md](docs/STATUS.md)): Check (0 Fehler/Warnungen), Lint/Format, **466/466 Vitest-Tests in 14 Dateien**, **48/48 UI-Tests in Chromium/Firefox**, Produktionsbuild, Web-ext (0 Fehler/Warnungen/Hinweise), echte MV3-Installation von `dist` und finaler XPI in Firefox 157 sowie Paketbau. Darunter sechs vollständige Integrationstests mit realem Executor, IndexedDB, Autorisierung, Transport und nativem Adapter gegen **synthetisches DOM, ohne YouTube-Mutation**. Der CI-Nachweis wird nach Veröffentlichung im [Lieferstatus](docs/STATUS.md) verlinkt. DOM-/UI-Fixtures sind keine Live-M3-Abnahme. Für Chromium optional `LATERSIFT_CHROMIUM_PATH=/usr/bin/chromium`; Browserdateien optional über `PLAYWRIGHT_BROWSERS_PATH`. Der Firefox-Smoke-Test nutzt Mozillas RDP auf einem lokalen zufälligen Port und ein frisches Profil, nicht das normale Browserprofil.

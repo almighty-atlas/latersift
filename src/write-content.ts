@@ -1,3 +1,8 @@
+import {
+  emptyDialogDiagnostic,
+  sanitizeDialogDiagnostic,
+  type DialogDiagnostic,
+} from './dialog-diagnostics';
 import browser from 'webextension-polyfill';
 import { createWriteAdapter } from './adapter/write';
 import { wait } from './adapter/scanner';
@@ -25,7 +30,14 @@ export function installWriteChannel(
     port.onMessage.addListener(async (message: unknown) => {
       let acquired = false;
       let deadline: ReturnType<typeof setTimeout> | undefined;
-      let reply: { ok: boolean; result?: unknown; error?: string };
+      let reply: {
+        ok: boolean;
+        result?: unknown;
+        error?: string;
+        diagnostic?: DialogDiagnostic;
+      };
+      let diagnostic: DialogDiagnostic | undefined;
+      let discovery = false;
       const abort = () => controller.abort();
       try {
         if (used || isBusy() || controller.signal.aborted)
@@ -34,6 +46,7 @@ export function installWriteChannel(
           );
         used = true;
         const request = validateWriteRequest(message);
+        discovery = request.method === 'playlists';
         setActive(controller);
         acquired = true;
         const remaining = request.approval
@@ -51,6 +64,9 @@ export function installWriteChannel(
           url: () => location.href,
           wait,
           signal: controller.signal,
+          onDiagnostic: (report) => {
+            diagnostic = sanitizeDialogDiagnostic(report);
+          },
         });
         const permit = async () => {
           const response: unknown = await browser.runtime.sendMessage({
@@ -123,6 +139,9 @@ export function installWriteChannel(
         window.removeEventListener('pagehide', abort);
         if (acquired) setActive(null);
       }
+      if (discovery)
+        reply.diagnostic =
+          diagnostic ?? emptyDialogDiagnostic('diagnosis-unavailable');
       try {
         port.postMessage(reply);
       } catch {
