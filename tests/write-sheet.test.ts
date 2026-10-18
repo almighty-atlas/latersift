@@ -91,6 +91,93 @@ describe('new Save sheet — synthetic, discovery only, no live compatibility cl
     ).adapter.getAvailablePlaylists(VIDEO);
     expect(choices.map((p) => p.title)).toEqual(['Archive', 'Other']);
   });
+  it.each(['aria-label', 'aria-labelledby', 'plain text'])(
+    'prefers a structured title over accessibility extras in %s',
+    async (source) => {
+      const row = sheetRow('Archive')
+        .replace(
+          'aria-label="Archive"',
+          source === 'aria-label'
+            ? 'aria-label="Archive, Private, Not selected"'
+            : source === 'aria-labelledby'
+              ? 'aria-labelledby="playlist-title privacy selection"'
+              : '',
+        )
+        .replace(
+          '<span>Archive</span>',
+          '<span id="playlist-title" class="yt-list-item-view-model__title">Archive</span><span id="privacy">Private</span><span id="selection">Not selected</span>',
+        );
+      const f = fixture(saveSheet(row));
+      expect((await f.adapter.getAvailablePlaylists(VIDEO))[0]).toMatchObject({
+        title: 'Archive',
+        id: null,
+        identity: 'unverified',
+        writable: false,
+        checked: false,
+      });
+      expect(f.mutations).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['Private', 'Not selected', 'My Private Archive, Not selected'])(
+    'preserves the actual structured playlist name %s verbatim',
+    async (title) => {
+      const row = sheetRow(title)
+        .replace(
+          `aria-label="${title}"`,
+          `aria-label="${title}, Private, Not selected"`,
+        )
+        .replace('<span>', '<span class="yt-list-item-view-model__title">');
+      expect(
+        (await fixture(saveSheet(row)).adapter.getAvailablePlaylists(VIDEO))[0]
+          .title,
+      ).toBe(title);
+    },
+  );
+  it.each(['no title', 'duplicate titles', 'hidden title', 'empty title'])(
+    'does not strip words from the accessible name with %s',
+    async (kind) => {
+      const title = 'Private, Not selected';
+      let row = sheetRow(title);
+      if (kind === 'duplicate titles')
+        row = row.replace(
+          `<span>${title}</span>`,
+          '<span class="yt-list-item-view-model__title">A</span><span class="yt-list-item-view-model__title">B</span>',
+        );
+      if (kind === 'hidden title')
+        row = row.replace(
+          '<span>',
+          '<span hidden class="yt-list-item-view-model__title">',
+        );
+      if (kind === 'empty title')
+        row = row.replace(
+          `<span>${title}</span>`,
+          '<span class="yt-list-item-view-model__title"> </span>',
+        );
+      expect(
+        (await fixture(saveSheet(row)).adapter.getAvailablePlaylists(VIDEO))[0]
+          .title,
+      ).toBe(title);
+    },
+  );
+  it.each(['external', 'duplicate'])(
+    'does not bypass %s aria-labelledby references with a structured title',
+    async (kind) => {
+      const row = sheetRow('Archive')
+        .replace('aria-label="Archive"', 'aria-labelledby="row-name"')
+        .replace(
+          '<span>',
+          `<span ${kind === 'duplicate' ? 'id="row-name" ' : ''}class="yt-list-item-view-model__title">`,
+        );
+      const f = fixture(saveSheet(row), (popup) =>
+        popup.insertAdjacentHTML(
+          'beforeend',
+          '<span id="row-name">Wrong playlist</span>',
+        ),
+      );
+      expect((await f.adapter.getAvailablePlaylists(VIDEO))[0].title).toBe('');
+      expect(f.mutations).not.toHaveBeenCalled();
+    },
+  );
   it('does not use an external or duplicated accessible name as a playlist name', async () => {
     const rows = sheetRow('Archive').replace(
       'aria-label="Archive"',

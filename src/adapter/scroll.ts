@@ -1,12 +1,17 @@
 import { ROW } from './dom';
 
 /** Only scroll geometry is changed; never click playlist controls or mutate rows. */
-export function createPlaylistScroller(doc: Document) {
+export function createPlaylistScroller(doc: Document, rootSelector?: string) {
   const container = () => {
-    const row =
-      doc.querySelector(ROW) ??
-      doc.querySelector('ytd-playlist-video-list-renderer');
-    for (let node = row?.parentElement; node; node = node.parentElement) {
+    const row = rootSelector
+      ? doc.querySelector(rootSelector)
+      : (doc.querySelector(ROW) ??
+        doc.querySelector('ytd-playlist-video-list-renderer'));
+    for (
+      let node = rootSelector ? row : row?.parentElement;
+      node;
+      node = node.parentElement
+    ) {
       const style = doc.defaultView?.getComputedStyle(node);
       if (
         style &&

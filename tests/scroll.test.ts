@@ -55,6 +55,37 @@ function fixture() {
 }
 
 describe('read-only playlist scroller geometry', () => {
+  it('scrolls the feed renderer itself when it is the nearest overflowing container', () => {
+    const f = fixture();
+    const feed = f.doc.createElement('ytd-rich-grid-renderer');
+    feed.style.overflowY = 'auto';
+    f.doc.body.append(feed);
+    const scroll = geometry(feed, 3000, 600);
+    const html = f.doc.body.innerHTML;
+    const scroller = createPlaylistScroller(
+      f.doc,
+      'ytd-rich-grid-renderer, ytd-section-list-renderer',
+    );
+    scroller.advance();
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({
+      top: 510,
+      behavior: 'instant',
+    });
+    expect(f.innerScroll).not.toHaveBeenCalled();
+    expect(f.rootScroll).not.toHaveBeenCalled();
+    expect(f.doc.body.innerHTML).toBe(html);
+  });
+
+  it('falls back to document geometry when a feed renderer has not loaded', () => {
+    const f = fixture();
+    const scroller = createPlaylistScroller(f.doc, 'ytd-rich-grid-renderer');
+    scroller.advance();
+    expect(f.rootScroll).toHaveBeenCalledExactlyOnceWith({
+      top: 850,
+      behavior: 'instant',
+    });
+    expect(f.innerScroll).not.toHaveBeenCalled();
+  });
   it.each(['nested', 'document'] as const)(
     'resets only the selected %s container to the beginning of a long loaded list',
     (kind) => {

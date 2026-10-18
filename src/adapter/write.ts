@@ -347,7 +347,18 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
             .length === 1
         );
       });
-    return localName ? name(checkbox) : '';
+    if (!localName) return '';
+    if (sheet) {
+      // Only a distinct title node separates the playlist name from accessibility extras.
+      const titles = [
+        ...checkbox.querySelectorAll('.yt-list-item-view-model__title'),
+      ].filter((el) => el.closest(SHEET_OPTION) === option && visible(el));
+      if (titles.length === 1) {
+        const title = normalize(titles[0].textContent);
+        if (title) return title;
+      }
+    }
+    return name(checkbox);
   }
   function selection(checkbox: Element, option: Element, sheet: boolean) {
     const aria = checkbox.getAttribute(sheet ? 'aria-pressed' : 'aria-checked');
