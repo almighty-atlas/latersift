@@ -35,6 +35,12 @@
   } from './bridge';
   import { availabilityLabels, decisionLabels } from './i18n';
   import OperationsPanel from './OperationsPanel.svelte';
+  import PlaylistPanel from './PlaylistPanel.svelte';
+  import {
+    createWorkTab,
+    waitForWorkTab,
+    cleanupOrphanWorkTabs,
+  } from './work-tabs';
   import { discoverPlaylists } from './write-bridge';
   import type { PlaylistChoice } from './operations';
   import {
@@ -74,6 +80,10 @@
   let port = $state.raw<Runtime.Port | null>(null);
   let connectedTab = $state<number | null>(null);
   let pausing = $state(false);
+  let experimentalBackground = $state(true);
+  let useExistingTab = $state(false);
+  let importWork: Awaited<ReturnType<typeof createWorkTab>> | null = null;
+  let disposed = false;
   let now = $state(Date.now());
   const activeScan = (s: Scan) =>
     ['running', 'waiting', 'needs_attention'].includes(s.status);
@@ -90,9 +100,15 @@
   );
   const scan = $derived(latestScan(lib));
   const resumable = $derived(scan?.status !== 'complete' ? scan : undefined);
+  const confirmedCount = $derived(
+    scan?.diagnostics?.confirmedCount ??
+      scan?.confirmedVideoIds?.length ??
+      scan?.videos.length ??
+      0,
+  );
   const progressPercent = $derived(
     scan?.expectedCount
-      ? Math.min(100, (scan.videos.length / scan.expectedCount) * 100)
+      ? Math.min(100, (confirmedCount / scan.expectedCount) * 100)
       : null,
   );
   const progressAge = $derived(
@@ -146,6 +162,8 @@
                 : null,
               continuation: d.continuation,
               confirmedCount: d.confirmedCount,
+              backgroundMode: d.backgroundMode,
+              timerThrottling: d.timerThrottling,
             }
           : null,
       },
@@ -161,7 +179,7 @@
   const hasPosition = $derived(videos.some((v) => v.position !== null));
 
   onMount(() => {
-    let disposed = false;
+    disposed = false;
     void import('webextension-polyfill')
       .then(({ default: browser }) => {
         const version = browser.runtime.getManifest().version;
@@ -184,6 +202,11 @@
         }
         owner = true;
         try {
+          try {
+            await cleanupOrphanWorkTabs();
+          } catch (e) {
+            error = `Arbeitstab-Bereinigung nicht möglich; lokale Daten bleiben verfügbar: ${String(e)}`;
+          }
           const loaded = await loadLibrary();
           const interrupted = latestScan(loaded);
           if (interrupted && activeScan(interrupted)) {
@@ -209,6 +232,9 @@
       disposed = true;
       clearInterval(timer);
       port?.disconnect();
+      void importWork?.close().catch(() => {
+        /* Startup cleanup retains the journal. */
+      });
       releaseLock?.();
     };
   });
@@ -307,13 +333,25 @@
     }
   }
   async function importVideos(resume?: Scan) {
-    if (disabled || !selectedTab) return;
-    const tabId = Number(selectedTab);
+    if (disabled || (useExistingTab && !selectedTab)) return;
     importing = true;
     pausing = false;
     feedback = '';
     error = '';
     try {
+      let tabId: number;
+      if (useExistingTab) tabId = Number(selectedTab);
+      else {
+        importWork = await createWorkTab('watch-later');
+        connectedTab = importWork.tabId;
+        await waitForWorkTab(importWork.tabId);
+        if (disposed) {
+          await importWork.close();
+          importWork = null;
+          return;
+        }
+        tabId = importWork.tabId;
+      }
       port = await connectScan(
         tabId,
         async (checkpoint) => {
@@ -322,6 +360,13 @@
           lib = copy;
         },
         async (message) => {
+          try {
+            await importWork?.close();
+          } catch (e) {
+            error = `Arbeitstab konnte nicht bereinigt werden: ${String(e)}`;
+          }
+          importWork = null;
+          connectedTab = null;
           importing = false;
           pausing = false;
           port = null;
@@ -347,12 +392,20 @@
             : 'Import gespeichert';
         },
         resume ? structuredClone(resume) : undefined,
+        experimentalBackground,
       );
       connectedTab = tabId;
     } catch (e) {
+      try {
+        await importWork?.close();
+      } catch (cleanupError) {
+        error = `Bereinigung fehlgeschlagen: ${String(cleanupError)}. `;
+      }
+      importWork = null;
+      connectedTab = null;
       importing = false;
       port = null;
-      error = `Import konnte nicht gestartet werden: ${String(e)}`;
+      error += `Import konnte nicht gestartet werden: ${String(e)}`;
     }
   }
   function exportJSON() {
@@ -369,7 +422,7 @@
     await saveLibrary(copy);
     lib = copy;
   }
-  async function loadPlaylists() {
+  async function loadPlaylistsFromDialog() {
     if (disabled || !videos[0]) return;
     busy = true;
     error = '';
@@ -532,6 +585,9 @@
         disabled={!ready || importing || operationsBusy || !scan}
         >↗ Backup</button
       >
+      <button class="quiet" onclick={() => (panel = 'archive')} {disabled}
+        >Playlists</button
+      >
       <button
         class="queue-count"
         onclick={() => (panel = 'queue')}
@@ -574,8 +630,8 @@
         <div class="empty-icon" aria-hidden="true">▤</div>
         <h2>Dein „Später“ beginnt hier.</h2>
         <p>
-          Verbinde einen angemeldeten YouTube-Tab.<br />LaterSift liest deine
-          Watch-Later-Liste und sichert sie lokal.
+          Bei YouTube angemeldet? LaterSift öffnet einen inaktiven Arbeitstab.<br
+          />Es liest deine Watch-Later-Liste und sichert sie lokal.
         </p>
         <button class="primary" onclick={showImport} {disabled}
           >Watch Later importieren <span>↗</span></button
@@ -796,27 +852,45 @@
         {#if panel === 'import'}
           <h2 id="panel-title">Watch Later lokal sichern.</h2>
           <p>
-            Öffne YouTube, melde dich an und zeige die Playlist „Später
-            ansehen“. Der Scan scrollt den ausgewählten Tab. Nutze ihn
-            währenddessen nicht anderweitig.
+            Start öffnet einen inaktiven Arbeitstab ohne Fokuswechsel. Du kannst
+            andere Tabs verwenden. Hintergrund-Nachladen ist experimentell: Bei
+            Blockaden bleibt der Teilbestand gesichert. Der Arbeitstab wird nach
+            Ende oder Pause aufgeräumt; Fortsetzen bestätigt die IDs erneut.
           </p>
-          <div class="inline-actions">
-            <button onclick={openYouTube} disabled={importing}
-              >YouTube öffnen ↗</button
-            ><button onclick={refreshTabs} disabled={importing}
-              >Tabs aktualisieren</button
-            >
-          </div>
-          <label for="youtube-tab">Verbundener Watch-Later-Tab</label><select
-            id="youtube-tab"
-            bind:value={selectedTab}
-            disabled={importing}
-            >{#if !tabs.length}<option value=""
-                >Kein passender Tab gefunden</option
-              >{/if}{#each tabs as tab (tab.id)}<option value={String(tab.id)}
-                >{tab.title || `YouTube-Tab ${tab.id}`} (Tab {tab.id})</option
-              >{/each}</select
+          <label
+            ><input
+              type="checkbox"
+              bind:checked={experimentalBackground}
+              disabled={importing}
+            /> Experimentelles Hintergrund-Scrollen erlauben</label
           >
+          <details>
+            <summary>Erweitert: vorhandenen YouTube-Tab verwenden</summary>
+            <label
+              ><input
+                type="checkbox"
+                bind:checked={useExistingTab}
+                disabled={importing}
+              /> Eigenen Tab verwenden (wird niemals automatisch geschlossen)</label
+            >
+            <div class="inline-actions">
+              <button onclick={openYouTube} disabled={importing}
+                >YouTube öffnen ↗</button
+              ><button onclick={refreshTabs} disabled={importing}
+                >Tabs aktualisieren</button
+              >
+            </div>
+            <label for="youtube-tab">Verbundener Watch-Later-Tab</label><select
+              id="youtube-tab"
+              bind:value={selectedTab}
+              disabled={importing}
+              >{#if !tabs.length}<option value=""
+                  >Kein passender Tab gefunden</option
+                >{/if}{#each tabs as tab (tab.id)}<option value={String(tab.id)}
+                  >{tab.title || `YouTube-Tab ${tab.id}`} (Tab {tab.id})</option
+                >{/each}</select
+            >
+          </details>
           {#if error}<p role="alert" class="error">{error}</p>{/if}
           <button
             onclick={activateTab}
@@ -830,7 +904,7 @@
             </p>{/if}
           {#if scan}<div class="scan-status">
               <strong
-                >{scan.videos.length.toLocaleString('de-DE')} / {scan.expectedCount?.toLocaleString(
+                >{confirmedCount.toLocaleString('de-DE')} / {scan.expectedCount?.toLocaleString(
                   'de-DE',
                 ) ?? '?'} Videos · {progressPercent === null
                   ? 'Prozent unbekannt'
@@ -843,7 +917,13 @@
                   : 'unbekannt'}
               </p>
               <p>{scan.message}</p>
-              <small>Nur lokal gesicherte Checkpoints werden angezeigt.</small>
+              <small
+                >{scan.videos.length} IDs insgesamt lokal erhalten. Nur lokal gesicherte
+                Checkpoints werden angezeigt. Im aktuellen Dokument bestätigte IDs:
+                {scan.diagnostics?.confirmedCount ??
+                  scan.confirmedVideoIds?.length ??
+                  0}.</small
+              >
               <details>
                 <summary>Import-Diagnose (ohne Video-Metadaten)</summary>
                 <textarea
@@ -875,13 +955,13 @@
             {#if resumable}<button
                 class="primary"
                 onclick={() => importVideos(resumable)}
-                disabled={disabled || !selectedTab}
+                disabled={disabled || (useExistingTab && !selectedTab)}
                 >Fortsetzen / erneut versuchen</button
               >{/if}
             <button
               class={resumable ? '' : 'primary'}
               onclick={() => importVideos()}
-              disabled={disabled || !selectedTab}
+              disabled={disabled || (useExistingTab && !selectedTab)}
               >Read-only-Import neu starten</button
             >
           {/if}
@@ -956,83 +1036,94 @@
             nur lokal gespeichert; seine Existenz, Schreibbarkeit und
             Video-Zugehörigkeiten sind noch nicht geprüft.
           </p>
-          <button onclick={loadPlaylists} disabled={disabled || !videos.length}
-            >Playlists aus YouTube laden</button
-          >
-          <p class="hint">
-            Öffnet ausdrücklich einen YouTube-Arbeitstab zur Abfrage. Keine
-            Playlist wird dabei verändert. Ein erkanntes neues Sheet bleibt zur
-            Kontrolle geöffnet; nach Abschluss der Abfrage kannst du zu
-            LaterSift zurückwechseln.
-          </p>
-          {#if playlistDiagnostic}
-            <details class="dialog-diagnostic">
-              <summary>Technische YouTube-Dialogdiagnose</summary>
-              <p class="hint">
-                UI-Auswahl und belegte Playlist-Identität werden getrennt
-                erfasst. Ein UI-Zustand beweist keine gespeicherte
-                Mitgliedschaft. Dieser Bericht enthält keine Playlist-Namen, IDs
-                oder Attributwerte.
-              </p>
-              <textarea
-                aria-label="Bereinigte YouTube-Dialogdiagnose"
-                readonly
-                rows="12"
-                value={playlistDiagnosticJSON}
-              ></textarea>
-              <button onclick={copyPlaylistDiagnostic}>Diagnose kopieren</button
-              >
-              {#if playlistDiagnosticFeedback}<p role="status">
-                  {playlistDiagnosticFeedback}
-                </p>{/if}
-            </details>
-          {/if}
-          {#if playlistChoices.length}
-            <p class="hint">
-              {playlistChoices.length} Einträge gelesen. Auswahlzustand ist keine
-              bestätigte gespeicherte Mitgliedschaft. Unbestätigte Identitäten sind
-              keine Schreibziele.
-            </p>
-            <ul aria-label="Erkannte YouTube-Playlists">
-              {#each playlistChoices as choice (choice)}
-                <li>
-                  <strong>{choice.title || 'Name unbekannt'}</strong> ·
-                  {choice.checked === true
-                    ? 'ausgewählt'
-                    : choice.checked === false
-                      ? 'nicht ausgewählt'
-                      : 'Auswahl unbekannt'} ·
-                  {choice.id
-                    ? `ID über Zeilenlink belegt: ${choice.id}`
-                    : 'Identität unbestätigt'}
-                  {#if choice.diagnostic}<p class="hint">
-                      {choice.diagnostic}
-                    </p>{/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          {#if playlistChoices.some((p) => p.id && p.id !== 'WL' && p.writable)}
-            <label for="archive-choice">Schreibbare YouTube-Playlist</label>
-            <select
-              id="archive-choice"
-              bind:value={playlistChoice}
-              onchange={() => {
-                if (
-                  playlistChoices.some(
-                    (p) => p.id === playlistChoice && p.writable,
-                  )
-                )
-                  archiveInput = playlistChoice;
-              }}
-              {disabled}
+          <PlaylistPanel
+            {disabled}
+            onchoose={(id) => {
+              archiveInput = id;
+            }}
+          />
+          <details>
+            <summary>Erweitert: bisherigen Save-Dialog untersuchen</summary>
+            <button
+              onclick={loadPlaylistsFromDialog}
+              disabled={disabled || !videos.length}
+              >Playlists aus YouTube laden (Save-Dialog, Vordergrund)</button
             >
-              <option value="">Bitte wählen</option>
-              {#each playlistChoices.filter((p) => p.id && p.id !== 'WL' && p.writable) as choice (choice)}<option
-                  value={choice.id}>{choice.title} ({choice.id})</option
-                >{/each}
-            </select>
-          {/if}
+            <p class="hint">
+              Nur auf ausdrücklichen Start: öffnet einen sichtbaren
+              Video-Arbeitstab. Keine automatische Rückkehr. Keine
+              YouTube-Änderungen.
+            </p>
+            {#if playlistDiagnostic}
+              <details class="dialog-diagnostic">
+                <summary>Technische YouTube-Dialogdiagnose</summary>
+                <p class="hint">
+                  UI-Auswahl und belegte Playlist-Identität werden getrennt
+                  erfasst. Ein UI-Zustand beweist keine gespeicherte
+                  Mitgliedschaft. Dieser Bericht enthält keine Playlist-Namen,
+                  IDs oder Attributwerte.
+                </p>
+                <textarea
+                  aria-label="Bereinigte YouTube-Dialogdiagnose"
+                  readonly
+                  rows="12"
+                  value={playlistDiagnosticJSON}
+                ></textarea>
+                <button onclick={copyPlaylistDiagnostic}
+                  >Diagnose kopieren</button
+                >
+                {#if playlistDiagnosticFeedback}<p role="status">
+                    {playlistDiagnosticFeedback}
+                  </p>{/if}
+              </details>
+            {/if}
+            {#if playlistChoices.length}
+              <p class="hint">
+                {playlistChoices.length} Einträge gelesen. Auswahlzustand ist keine
+                bestätigte gespeicherte Mitgliedschaft. Unbestätigte Identitäten sind
+                keine Schreibziele.
+              </p>
+              <ul aria-label="Erkannte YouTube-Playlists">
+                {#each playlistChoices as choice (choice)}
+                  <li>
+                    <strong>{choice.title || 'Name unbekannt'}</strong> ·
+                    {choice.checked === true
+                      ? 'ausgewählt'
+                      : choice.checked === false
+                        ? 'nicht ausgewählt'
+                        : 'Auswahl unbekannt'} ·
+                    {choice.id
+                      ? `ID über Zeilenlink belegt: ${choice.id}`
+                      : 'Identität unbestätigt'}
+                    {#if choice.diagnostic}<p class="hint">
+                        {choice.diagnostic}
+                      </p>{/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            {#if playlistChoices.some((p) => p.id && p.id !== 'WL' && p.writable)}
+              <label for="archive-choice">Schreibbare YouTube-Playlist</label>
+              <select
+                id="archive-choice"
+                bind:value={playlistChoice}
+                onchange={() => {
+                  if (
+                    playlistChoices.some(
+                      (p) => p.id === playlistChoice && p.writable,
+                    )
+                  )
+                    archiveInput = playlistChoice;
+                }}
+                {disabled}
+              >
+                <option value="">Bitte wählen</option>
+                {#each playlistChoices.filter((p) => p.id && p.id !== 'WL' && p.writable) as choice (choice)}<option
+                    value={choice.id}>{choice.title} ({choice.id})</option
+                  >{/each}
+              </select>
+            {/if}
+          </details>
           <label for="archive-url">YouTube-Playlist-URL oder PL…-ID</label
           ><input
             id="archive-url"

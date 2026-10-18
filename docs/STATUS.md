@@ -1,6 +1,30 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.2 – Versionsanzeige und Dialogdiagnose
+## Aktuell: 0.2.3 / M3.2 – lesender Hintergrundbetrieb
+
+Basis: **0.2.2**, Stand: 18.10.2026. Dokumentierter Implementierungsvertrag, **keine Live-Abnahme**. Keine Live-DOM-Aufnahme des Playlist-Feeds und kein angemeldeter Zen-Test verfügbar. [M3.2: Vertrag, Grenzen und getrennte manuelle Checklisten](M3.2.md).
+
+1. **Schritt 1 – Playlist-Feed:** „Playlists aktualisieren“ liest `/feed/playlists` im eigenen inaktiven Arbeitstab. `src/adapter/playlists.ts` verwendet nur unbestätigte Kandidatenstrukturen, echte `/playlist?list=…`-Links und separates Titel-DOM derselben Karte. Sichtbarkeit ausschließlich aus expliziten Privacy-Badges, Eigentum immer `unknown`. Kein `complete`, auch nicht bei stabilem Ende. Katalog und vorherige stale Einträge liegen separat im `localStorage`, nicht im bisherigen JSON-Backup. Keine Schreibberechtigung aus Feedtreffern.
+2. **Schritt 2 – experimenteller WL-Import:** sichtbare Hintergrundcheckbox standardmäßig ausgewählt; ausdrücklicher Start übergibt die Erlaubnis für echtes Hidden-Scrollen. Originale Vollständigkeitsprüfung unverändert. Historische 4.926 sind kein erwarteter aktueller Zähler. Pause/Fortsetzen und Neustart müssen gesicherte Teilbestände erhalten und im neuen Dokument erneut bestätigen.
+
+Eigene Arbeitstabs: `active: false`, URL mit UUID-Fragment, separates `localStorage`-Journal, Web Locks pro Quelle. Own-only Cleanup bei Ende/Pause/Fehler und beim Wiederöffnen von LaterSift; exakte Tab-/URL-/Markerprüfung, niemals Originaltabs schließen. Bei Markerverlust Tab behalten. Crash zwischen Tab-Erstellung und Journalpersistenz kann einen nicht sicher aufräumbaren Tab hinterlassen. Kein automatischer Fokus, ausdrücklicher Aktivieren-Button während der Arbeit als Fallback. Bisheriger Save-Dialog bleibt unter „Erweitert“ als Vordergrunddiagnose erhalten; dessen aktiver Arbeitstab ist nicht mit dem neuen Feedscan zu verwechseln.
+
+Timerverzögerung bleibt Heuristik; der Bridge-Watchdog für 60 Sekunden ohne Checkpoint wirkt nur bei tatsächlich ausgeführten Extension-Timern und nach ausstehenden Speicherbestätigungen. Keine garantierte Frist, Hintergrundnachladung oder Vollständigkeit. **A** ist ein inaktiver sichtbarer Tab, **B** (`tabs.hide`) nur konzeptionell und nicht implementiert. Page Visibility API: beide im Hintergrund `hidden`; Scroll-/IntersectionObserver-/Timerverhalten plattformabhängig, live ungeprüft. B benötigte zusätzlich `tabHide`, vorherigen Nutzerhinweis und Firefox-Benachrichtigung beim ersten Verstecken. Keine `tabHide`-Berechtigung, keine Stealth-Garantie, keine Konsolen-Berechtigungsumgehung.
+
+Keine neuen YouTube-Writes oder Gates, keine gelockerten Identitäts-/Schreibprüfungen, keine zusätzlichen Berechtigungen. Abnahme ausschließlich lesend: Anmeldung, viele Playlists, tatsächliche DOM-Struktur, Lazy Loading/Pagination, gleiche Namen mit verschiedenen IDs, inaktiver Scan während anderer Tabnutzung, Pause/Fortsetzen/Neustart, Tabverlust, Markerverlust, Cleanup und ehrliche Unvollständigkeit; A manuell prüfen, B nicht als getestet ausgeben.
+
+### Qualitätsergebnisse 0.2.3
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **653/653 in 18 Dateien**. Getrennt prüfbar: `tests/playlists.test.ts` (38 Feed-/Identitätsfälle), `tests/work-tabs.test.ts` (27 Lifecycle-Fälle), `tests/bridge.test.ts` (31 Transport-/Watchdog-Fälle) und `tests/scanner.test.ts` (53 Scanner-Fälle). DOM-Geometrie, Save-Sheet-Titel und bestehende Sicherheitskette zusätzlich geprüft.
+- `pnpm test:ui`: **66/66 in Chromium und Firefox**. Mock-Transport mit `active: false`, Persistenz-vor-ACK, Tab-Bereinigung, Katalog über mehrere Teilaktualisierungen/Reload, bestätigte versus erhaltene IDs sowie Bibliotheks-/Backupzugriff trotz defektem Cleanup-Journal. Kein echter YouTube-Tab bei diesen Fixtures.
+- `pnpm package`: Produktionsbuild und `artifacts/latersift-0.2.3-unsigned.xpi` erfolgreich. `pnpm lint:extension`: **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- `pnpm test:firefox-extension` sowie `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.3-unsigned.xpi node scripts/test-firefox.mjs`: echte temporäre MV3-Installation aus `dist` und finaler XPI in **Firefox 157.0**, keine Manifestwarnungen.
+- SHA-256 der lokal getesteten XPI: `768bc0f40620b36c9a4c71428c8e1acb53a6be07c8a4d2f4707d8d0c4fb6e429`.
+
+Kein angemeldeter YouTube-/Zen-Live-Test, keine echte Messung von Hintergrund-IntersectionObserver oder Browser-Drosselung, kein `tabs.hide`-Versuch. Throttling, Tabverlust und Unterbrechungen sind synthetisch simuliert; Installationsprüfungen belegen keine Live-DOM-Kompatibilität. Keine Signierung/AMO-Veröffentlichung. Die folgenden historischen Ergebnisse gelten nicht als Nachweis für 0.2.3.
+
+## Historischer Stand: 0.2.2 – Versionsanzeige und Dialogdiagnose
 
 Stand: 18.10.2026. Header-Version aus dem installierten WebExtension-Manifest, auch mobil sichtbar. Aufklappbarer, kopierbarer Diagnosebericht nach der vorhandenen Playlist-Abfrage, auch nach Fehlern; UI-Zustand und Identitätsbeleg getrennt. Nur Zähler, Zeilennummern, freigegebene Attributnamen und feste Gründe; keine Namen, tatsächlichen IDs, Attributwerte, DOM-Inhalte oder rohen Fehlertexte. Details und lesende Zen-Abnahme: [DIALOG-DIAGNOSTICS.md](DIALOG-DIAGNOSTICS.md).
 
@@ -66,7 +90,7 @@ Der frühere Teilimport in Zen/CachyOS hatte 4.686 statt 4.926 IDs, höchste Pos
 - **Auch WL verlangt einen expliziten Link `/playlist?list=WL` innerhalb derselben Checkbox-Option**, Archiv entsprechend `list=PL…`. Niemals Label allein: eine eigene Playlist namens „Watch later“ darf keinen WL-False-Match auslösen. Ohne WL-Link kein Remove; fehlende Identität ist `unknown`, nicht `absent`.
 - Viele aktuelle YouTube-Varianten exponieren diese Links nicht: **Alle Mutationen können unsupported sein**, nicht nur Archivieren. Ehrliche fail-closed Grundlage, aktuelle Live-Kompatibilität unbekannt. Manuelle URL/ID und Titelzuordnung sind kein Bypass. Ab M3.1 gibt `getAvailablePlaylists` nicht identifizierte Zeilen nur zur Diagnose zurück; sie bleiben nicht schreibbar.
 - `getPlaylistMembership` öffnet einen frischen Dialog; die Bridge erzwingt vor **jeder** Mitgliedschaftsbeobachtung zusätzlich `reload(..., { bypassCache: true })`, **auch nach Videowechsel**. Navigation allein oder optimistisches Checkbox-Feedback reicht nicht; diese DOM-Evidenz ersetzt keinen Live-Test.
-- Discovery- und Ausführungsbutton öffnen ausdrücklich einen eigenen aktiven YouTube-Arbeitstab. Aktiv/fokussiert halten; keine wiederholte automatische Aktivierung. Original-WL-Tab und Arbeitstab bleiben zur unabhängigen Prüfung erhalten.
+- Die erweiterte Legacy-Discovery über den Save-Dialog und der Schreib-Ausführungsbutton öffnen ausdrücklich einen eigenen aktiven YouTube-Arbeitstab. Aktiv/fokussiert halten; keine wiederholte automatische Aktivierung. Original-WL-Tab und dieser Legacy-Arbeitstab bleiben zur unabhängigen Prüfung erhalten. Nicht mit dem neuen inaktiven Feedscan/WL-Arbeitstab aus M3.2 verwechseln.
 
 ### Sicherheitsgates und Wiederaufnahme
 

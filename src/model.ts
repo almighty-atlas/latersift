@@ -37,6 +37,14 @@ export interface ScanDiagnostics {
   attentionMs?: number;
   totalAttentionMs?: number;
   recoveryResults?: string[];
+  backgroundMode?: 'paused' | 'experimental';
+  // Delayed waits suggest throttling, but do not establish its cause.
+  timerThrottling?: {
+    requestedMs: number;
+    lastElapsedMs: number;
+    maxElapsedMs: number;
+    delayedWaits: number;
+  };
 }
 export interface Scan {
   id: string;

@@ -70,10 +70,34 @@ test('empty state is honest, import has no simulated YouTube results', async ({
   await page.goto('/');
   await page.getByRole('button', { name: 'Watch Later importieren' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByText('Kein passender Tab gefunden')).toBeAttached();
+  const dialog = page.getByRole('dialog');
+  const start = dialog.getByRole('button', {
+    name: 'Read-only-Import neu starten',
+  });
+  await expect(start).toBeEnabled();
+  const existingTab = dialog.getByRole('checkbox', {
+    name: 'Eigenen Tab verwenden (wird niemals automatisch geschlossen)',
+    exact: true,
+  });
+  await expect(existingTab).not.toBeVisible();
+  await dialog
+    .getByText('Erweitert: vorhandenen YouTube-Tab verwenden', { exact: true })
+    .click();
+  await expect(existingTab).not.toBeChecked();
+  await expect(dialog.getByLabel('Verbundener Watch-Later-Tab')).toHaveValue(
+    '',
+  );
+  await expect(dialog.getByText('Kein passender Tab gefunden')).toBeAttached();
   await expect(
-    page.getByRole('button', { name: 'Read-only-Import neu starten' }),
-  ).toBeDisabled();
+    dialog.getByRole('button', { name: 'Tabs aktualisieren' }),
+  ).toBeEnabled();
+  await expect(
+    dialog.getByRole('button', { name: 'YouTube öffnen ↗' }),
+  ).toBeEnabled();
+  await existingTab.check();
+  await expect(start).toBeDisabled();
+  await existingTab.uncheck();
+  await expect(start).toBeEnabled();
   await expect(page.getByRole('alert').last()).toContainText(
     'geladenen Firefox-/Zen-Erweiterung',
   );
@@ -85,7 +109,7 @@ for (const status of [
   'waiting',
   'needs_attention',
 ] as const) {
-  test(`persisted ${status} scan shows durable partial progress and disabled resume without an extension tab`, async ({
+  test(`persisted ${status} scan preserves partial progress and allows work-tab resume without a selected tab`, async ({
     page,
   }) => {
     await seed(page, {
@@ -124,13 +148,30 @@ for (const status of [
       name: 'Fortsetzen / erneut versuchen',
     });
     await expect(resume).toBeVisible();
-    await expect(resume).toBeDisabled();
+    await expect(resume).toBeEnabled();
+    const restart = dialog.getByRole('button', {
+      name: 'Read-only-Import neu starten',
+    });
+    await expect(restart).toBeEnabled();
+    await dialog
+      .getByText('Erweitert: vorhandenen YouTube-Tab verwenden', {
+        exact: true,
+      })
+      .click();
     await expect(dialog.getByLabel('Verbundener Watch-Later-Tab')).toHaveValue(
       '',
     );
-    await expect(
-      dialog.getByRole('button', { name: 'Read-only-Import neu starten' }),
-    ).toBeDisabled();
+    const existingTab = dialog.getByRole('checkbox', {
+      name: 'Eigenen Tab verwenden (wird niemals automatisch geschlossen)',
+      exact: true,
+    });
+    await expect(existingTab).not.toBeChecked();
+    await existingTab.check();
+    await expect(resume).toBeDisabled();
+    await expect(restart).toBeDisabled();
+    await existingTab.uncheck();
+    await expect(resume).toBeEnabled();
+    await expect(restart).toBeEnabled();
     await expect(
       dialog.getByRole('button', { name: 'YouTube-Tab aktivieren ↗' }),
     ).toBeDisabled();
@@ -184,7 +225,7 @@ for (const totalAttentionMs of [undefined, 9000]) {
       ...(totalAttentionMs === undefined ? {} : { totalAttentionMs }),
       scroll: { container: 'document', top: 1200, height: 2400, viewport: 800 },
       continuation: true,
-      confirmedCount: 8,
+      confirmedCount: 2,
     };
     await seed(page, {
       status: 'needs_attention',
@@ -203,7 +244,14 @@ for (const totalAttentionMs of [undefined, 9000]) {
     await expect(
       dialog.getByText('Unterbrochen / pausiert', { exact: true }),
     ).toBeVisible();
-    await expect(dialog.getByText('3 / 8 Videos · 37,5 %')).toBeVisible();
+    await expect(dialog.getByText('2 / 8 Videos · 25,0 %')).toBeVisible();
+    await expect(dialog.getByText('3 / 8 Videos · 37,5 %')).toHaveCount(0);
+    await expect(
+      dialog.getByText(/3 IDs insgesamt lokal erhalten\./),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(/Im aktuellen Dokument bestätigte IDs:\s*2\./),
+    ).toBeVisible();
     await expect(
       dialog.getByText(/Letzter Fortschritt: vor \d+ s/),
     ).toBeVisible();
@@ -215,7 +263,7 @@ for (const totalAttentionMs of [undefined, 9000]) {
     ).toBeDisabled();
     await expect(
       dialog.getByRole('button', { name: 'Fortsetzen / erneut versuchen' }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     await expect(
       dialog.getByText('Vollständig geprüft', { exact: true }),
     ).toHaveCount(0);
@@ -299,7 +347,7 @@ test('latest complete scan does not offer resume for an older incomplete scan', 
     name: 'Read-only-Import neu starten',
   });
   await expect(restart).toBeVisible();
-  await expect(restart).toBeDisabled();
+  await expect(restart).toBeEnabled();
   await dialog
     .getByText('Import-Diagnose (ohne Video-Metadaten)', { exact: true })
     .click();
@@ -526,6 +574,342 @@ async function fakeDiscovery(page: Page, fail = false, denyCopy = false) {
   );
 }
 
+async function fakePlaylistFeed(
+  page: Page,
+  batches: { id: string; name: string }[][] | null = null,
+) {
+  await page.addInitScript((batches) => {
+    let refreshIndex = 0;
+    const key = 'latersift-playlist-catalog-v1';
+    const catalog = {
+      entries: [
+        {
+          id: 'PLfixtureFeed123456',
+          name: 'Fixture feed archive',
+          url: 'https://www.youtube.com/playlist?list=PLfixtureFeed123456',
+          visibility: 'private',
+          ownership: 'unknown',
+        },
+        {
+          id: 'WL',
+          name: 'Fixture Watch Later',
+          url: 'https://www.youtube.com/playlist?list=WL',
+          visibility: 'unknown',
+          ownership: 'unknown',
+        },
+      ],
+      status: 'partial',
+      updatedAt: '2026-10-18T00:00:00Z',
+      message: 'Fixture feed: Vollständigkeit bleibt offen.',
+      diagnostics: {
+        reason: 'feed_exhausted',
+        rounds: 2,
+        scrollAttempts: 1,
+        observedScrolls: 1,
+        scroll: null,
+        continuation: false,
+        continuationSeen: false,
+        unsupportedCards: 0,
+        expectedCount: null,
+        completenessVerified: false,
+      },
+    };
+    const transport = {
+      created: [] as { url: string; active: boolean }[],
+      connections: [] as { tabId: number; name: string }[],
+      requests: [] as unknown[],
+      acknowledgedAfterSave: false,
+      disconnected: false,
+      removed: [] as number[],
+    };
+    let url = '';
+    const api = {
+      runtime: { id: 'synthetic-feed@latersift' },
+      tabs: {
+        create: async (options: { url: string; active: boolean }) => {
+          transport.created.push(options);
+          url = options.url;
+          return { id: 321 };
+        },
+        get: async () => ({ id: 321, url, active: false, status: 'complete' }),
+        remove: async (tabId: number) => {
+          transport.removed.push(tabId);
+        },
+        connect: (tabId: number, options: { name: string }) => {
+          transport.connections.push({ tabId, name: options.name });
+          const checkpoint = {
+            ...catalog,
+            entries: batches
+              ? (batches[refreshIndex++] ?? []).map((entry) => ({
+                  ...entry,
+                  url: `https://www.youtube.com/playlist?list=${entry.id}`,
+                  visibility: 'unknown',
+                  ownership: 'unknown',
+                }))
+              : catalog.entries,
+          };
+          let reply: (message: unknown) => void;
+          return {
+            onMessage: {
+              addListener: (listener: typeof reply) => {
+                reply = listener;
+              },
+            },
+            onDisconnect: { addListener: () => {} },
+            disconnect: () => {
+              transport.disconnected = true;
+            },
+            postMessage: (request: { type?: string; ack?: number }) => {
+              transport.requests.push(request);
+              if (request.type === 'playlists') {
+                queueMicrotask(() =>
+                  reply({ type: 'checkpoint', id: 1, scan: checkpoint }),
+                );
+              } else if (request.ack === 1) {
+                transport.acknowledgedAfterSave =
+                  localStorage.getItem(key) === JSON.stringify(checkpoint);
+                queueMicrotask(() => reply({ type: 'done' }));
+              } else {
+                throw new Error(
+                  'Fixture forbids writes and unexpected read requests',
+                );
+              }
+            },
+          };
+        },
+      },
+    };
+    Object.assign(globalThis, {
+      chrome: api,
+      browser: api,
+      playlistTransport: transport,
+    });
+  }, batches);
+}
+
+test('playlist feed uses an inactive read-only work tab and persists checkpoints before acknowledging', async ({
+  page,
+}) => {
+  await seed(page);
+  await fakePlaylistFeed(page);
+  await page.reload();
+  await page.getByRole('button', { name: 'Runde starten' }).click();
+  const openArchive = async () => {
+    await page.getByRole('button', { name: 'Runde anpassen' }).click();
+    await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
+  };
+  await openArchive();
+  const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+  await expect(
+    panel.getByText(/Read-only im inaktiven Arbeitstab/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', {
+      name: 'Playlists aus YouTube laden (Save-Dialog, Vordergrund)',
+      exact: true,
+    }),
+  ).not.toBeVisible();
+  await panel
+    .getByRole('button', { name: 'Playlists aktualisieren', exact: true })
+    .click();
+  await expect(panel.getByRole('status')).toContainText(
+    '2 Playlists · Teilbestand / Vollständigkeit offen',
+  );
+  await expect(
+    panel.getByRole('button', { name: 'Playlists aktualisieren', exact: true }),
+  ).toBeEnabled();
+  const list = panel.getByRole('list', { name: 'Verifizierte Playlist-IDs' });
+  await expect(list.getByRole('listitem')).toHaveCount(2);
+  const archive = list
+    .getByRole('listitem')
+    .filter({ hasText: 'Fixture feed archive' });
+  await expect(archive).toContainText(
+    'Sichtbarkeit: private · Eigentümer: unbekannt',
+  );
+  await expect(
+    list
+      .getByRole('listitem')
+      .filter({ hasText: 'Fixture Watch Later' })
+      .getByRole('button', { name: 'Als lokales Archivziel wählen' }),
+  ).toBeDisabled();
+  await expect
+    .poll(() =>
+      page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+    )
+    .toEqual({
+      created: [
+        {
+          url: expect.stringMatching(
+            /^https:\/\/www\.youtube\.com\/feed\/playlists#latersift-work=[\da-f-]{36}$/,
+          ),
+          active: false,
+        },
+      ],
+      connections: [{ tabId: 321, name: 'latersift-readonly-v1' }],
+      requests: [{ type: 'playlists' }, { ack: 1 }],
+      acknowledgedAfterSave: true,
+      disconnected: true,
+      removed: [321],
+    });
+  await archive
+    .getByRole('button', { name: 'Als lokales Archivziel wählen' })
+    .click();
+  await expect(page.getByLabel('YouTube-Playlist-URL oder PL…-ID')).toHaveValue(
+    'PLfixtureFeed123456',
+  );
+  // Choosing from the feed only fills the local form; it does not save the target.
+  await page.reload();
+  await openArchive();
+  await expect(page.getByLabel('YouTube-Playlist-URL oder PL…-ID')).toHaveValue(
+    'PL1234567890123456',
+  );
+  await expect(panel.getByRole('status')).toContainText(
+    '2 Playlists · Teilbestand / Vollständigkeit offen',
+  );
+  await expect(list.getByRole('listitem')).toHaveCount(2);
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, 'playlistTransport').created,
+    ),
+  ).toEqual([]);
+});
+
+test('successive partial playlist refreshes retain older IDs without duplicating current entries, including after reload', async ({
+  page,
+}) => {
+  await seed(page);
+  await fakePlaylistFeed(page, [
+    [
+      { id: 'PLfixtureA', name: 'Older archive A' },
+      { id: 'PLfixtureB', name: 'Original archive B' },
+    ],
+    [
+      { id: 'PLfixtureB', name: 'Updated archive B' },
+      { id: 'PLfixtureC', name: 'Original archive C' },
+    ],
+    [
+      { id: 'PLfixtureC', name: 'Updated archive C' },
+      { id: 'PLfixtureD', name: 'Current archive D' },
+    ],
+  ]);
+  await page.reload();
+  const openArchive = async () => {
+    await page.getByRole('button', { name: 'Playlists', exact: true }).click();
+  };
+  await openArchive();
+  const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+  const current = panel.getByRole('list', {
+    name: 'Verifizierte Playlist-IDs',
+  });
+  const staleSummary = panel.getByText(
+    'Vorheriger Katalog (veraltet, vor dieser Aktualisierung)',
+    { exact: true },
+  );
+  const stale = panel.locator('details').filter({
+    has: page.getByText(
+      'Vorheriger Katalog (veraltet, vor dieser Aktualisierung)',
+      { exact: true },
+    ),
+  });
+  const refresh = panel.getByRole('button', {
+    name: 'Playlists aktualisieren',
+    exact: true,
+  });
+  const refreshAndExpect = async (names: string[]) => {
+    await refresh.click();
+    await expect(current.getByRole('listitem').locator('strong')).toHaveText(
+      names,
+    );
+    await expect(refresh).toBeEnabled();
+    await expect(panel.getByRole('status')).toContainText(
+      '2 Playlists · Teilbestand / Vollständigkeit offen',
+    );
+  };
+  await refreshAndExpect(['Older archive A', 'Original archive B']);
+  await expect(staleSummary).toHaveCount(0);
+  await refreshAndExpect(['Updated archive B', 'Original archive C']);
+  await staleSummary.click();
+  await expect(stale.getByRole('listitem')).toHaveText([
+    'Older archive A · PLfixtureA',
+  ]);
+  await refreshAndExpect(['Updated archive C', 'Current archive D']);
+  const expectRetainedCatalog = async () => {
+    if ((await stale.getAttribute('open')) === null) await staleSummary.click();
+    await expect(stale).toHaveAttribute('open', '');
+    await expect(current.getByRole('listitem').locator('strong')).toHaveText([
+      'Updated archive C',
+      'Current archive D',
+    ]);
+    await expect(stale.getByRole('listitem')).toHaveText([
+      'Older archive A · PLfixtureA',
+      'Updated archive B · PLfixtureB',
+    ]);
+    await expect(stale.getByRole('button')).toHaveCount(0);
+    await expect(
+      panel.getByText('Original archive B', { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      panel.getByText('Original archive C', { exact: true }),
+    ).toHaveCount(0);
+  };
+  await expectRetainedCatalog();
+  await page.reload();
+  await openArchive();
+  await staleSummary.click();
+  await expectRetainedCatalog();
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, 'playlistTransport').created,
+    ),
+  ).toEqual([]);
+});
+
+for (const [kind, journal] of [
+  ['malformed JSON', '{invalid-json'],
+  ['invalid entries', JSON.stringify([{ tabId: 321 }])],
+]) {
+  test(`invalid work journal (${kind}) reports cleanup failure but keeps the local library and backup available`, async ({
+    page,
+  }) => {
+    await seed(page);
+    await page.evaluate((journal) => {
+      localStorage.setItem('latersift.work-tabs.v1', journal);
+    }, journal);
+    await page.reload();
+    await expect(page.getByRole('alert')).toContainText(
+      'Arbeitstab-Bereinigung nicht möglich; lokale Daten bleiben verfügbar:',
+    );
+    await expect(
+      page.getByText(/Lokale Datenbank nicht verfügbar:/),
+    ).toHaveCount(0);
+    const start = page.getByRole('button', {
+      name: 'Runde starten →',
+      exact: true,
+    });
+    await expect(start).toBeEnabled();
+    const backup = page.getByRole('button', { name: '↗ Backup', exact: true });
+    await expect(backup).toBeEnabled();
+    const downloadEvent = page.waitForEvent('download');
+    await backup.click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toContain('latersift-backup-');
+    expect(await download.failure()).toBeNull();
+    const stream = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    const exported = Buffer.concat(chunks).toString('utf8');
+    expect(exported).toContain('fixture-explicit');
+    expect(exported).toContain('Fixture Video 1');
+    await start.click();
+    await expect(
+      page.getByRole('heading', { name: 'Fixture Video 1' }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() => localStorage.getItem('latersift.work-tabs.v1')),
+    ).toBe(journal);
+  });
+}
+
 test('header displays the installed manifest version on desktop and mobile', async ({
   page,
 }) => {
@@ -559,8 +943,22 @@ for (const fail of [false, true])
     await page.getByRole('button', { name: 'Runde starten' }).click();
     await page.getByRole('button', { name: 'Runde anpassen' }).click();
     await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
+    await expect(
+      page.getByRole('button', {
+        name: 'Playlists aktualisieren',
+        exact: true,
+      }),
+    ).toBeVisible();
     await page
-      .getByRole('button', { name: 'Playlists aus YouTube laden' })
+      .getByText('Erweitert: bisherigen Save-Dialog untersuchen', {
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole('button', {
+        name: 'Playlists aus YouTube laden (Save-Dialog, Vordergrund)',
+        exact: true,
+      })
       .click();
 
     if (!fail) {
@@ -633,7 +1031,13 @@ test('clipboard denial keeps the sanitized report available for manual copying',
   await page.getByRole('button', { name: 'Runde anpassen' }).click();
   await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
   await page
-    .getByRole('button', { name: 'Playlists aus YouTube laden' })
+    .getByText('Erweitert: bisherigen Save-Dialog untersuchen', { exact: true })
+    .click();
+  await page
+    .getByRole('button', {
+      name: 'Playlists aus YouTube laden (Save-Dialog, Vordergrund)',
+      exact: true,
+    })
     .click();
 
   await page

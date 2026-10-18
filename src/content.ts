@@ -2,6 +2,7 @@ import browser from 'webextension-polyfill';
 import { wait } from './adapter/scanner';
 import { createYouTubeAdapter } from './adapter/youtube';
 import { createPlaylistScroller } from './adapter/scroll';
+import { scanPlaylists } from './adapter/playlists';
 import type { Scan } from './model';
 import { installWriteChannel } from './write-content';
 let documentId = crypto.randomUUID();
@@ -33,7 +34,7 @@ browser.runtime.onConnect.addListener((port) => {
       controller.abort();
       return;
     }
-    if (message.type !== 'scan' || active) {
+    if (!['scan', 'playlists'].includes(String(message.type)) || active) {
       port.postMessage({
         type: 'error',
         message: 'In diesem Tab läuft bereits ein Import.',
@@ -53,56 +54,72 @@ browser.runtime.onConnect.addListener((port) => {
     });
     try {
       const scroller = createPlaylistScroller(document);
-      await createYouTubeAdapter({
-        doc: document,
-        url: () => location.href,
-        wait,
-        get documentId() {
-          return documentId;
-        },
-        advance: scroller.advance,
-        scrollInfo: scroller.info,
-        resetScroll: scroller.reset,
-      }).scanWatchLater(
-        controller.signal,
-        async (scan) => {
-          // Backpressure: do not proceed until the extension page persisted the checkpoint.
-          const id = crypto.randomUUID();
-          const saved = new Promise<void>((resolve, reject) => {
-            const cleanup = () => {
-              clearTimeout(timer);
-              ack.delete(id);
-              port.onDisconnect.removeListener(abort);
-            };
-            const abort = () => {
-              cleanup();
-              reject(
-                new Error(
-                  'Speicherung unterbrochen; letzter bestätigter Checkpoint bleibt erhalten.',
-                ),
-              );
-            };
-            const timer = setTimeout(() => {
-              cleanup();
-              reject(
-                new Error(
-                  'Lokale Speicherung nicht bestätigt. Import gestoppt.',
-                ),
-              );
-            }, 15000);
-            ack.set(id, () => {
-              cleanup();
-              resolve();
-            });
-            // Cancellation still commits the final interrupted checkpoint. Only a
-            // disconnected port aborts an outstanding ACK (see onDisconnect).
-            port.onDisconnect.addListener(abort);
+      const persist = async (scan: unknown) => {
+        const id = crypto.randomUUID();
+        const saved = new Promise<void>((resolve, reject) => {
+          const cleanup = () => {
+            clearTimeout(timer);
+            ack.delete(id);
+            port.onDisconnect.removeListener(abort);
+          };
+          const abort = () => {
+            cleanup();
+            reject(
+              new Error(
+                'Speicherung unterbrochen; letzter bestätigter Checkpoint bleibt erhalten.',
+              ),
+            );
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(
+              new Error('Lokale Speicherung nicht bestätigt. Import gestoppt.'),
+            );
+          }, 15000);
+          ack.set(id, () => {
+            cleanup();
+            resolve();
           });
-          port.postMessage({ type: 'checkpoint', scan, id });
-          await saved;
-        },
-        'resume' in message ? (message.resume as Scan) : undefined,
-      );
+          port.onDisconnect.addListener(abort);
+        });
+        port.postMessage({ type: 'checkpoint', scan, id });
+        await saved;
+      };
+      if (message.type === 'playlists') {
+        const feedScroller = createPlaylistScroller(
+          document,
+          'ytd-rich-grid-renderer, ytd-section-list-renderer',
+        );
+        await scanPlaylists(
+          {
+            doc: document,
+            url: () => location.href,
+            wait,
+            advance: feedScroller.advance,
+            scrollInfo: feedScroller.info,
+          },
+          controller.signal,
+          persist,
+        );
+      } else
+        await createYouTubeAdapter({
+          doc: document,
+          url: () => location.href,
+          wait,
+          get documentId() {
+            return documentId;
+          },
+          advance: scroller.advance,
+          scrollInfo: scroller.info,
+          resetScroll: scroller.reset,
+        }).scanWatchLater(
+          controller.signal,
+          persist,
+          'resume' in message ? (message.resume as Scan) : undefined,
+          'background' in message && message.background === 'experimental'
+            ? { background: 'experimental' }
+            : {},
+        );
       port.postMessage({ type: 'done' });
     } catch (error) {
       try {

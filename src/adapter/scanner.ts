@@ -52,6 +52,8 @@ export const SCAN_DEFAULTS = {
 };
 export type ScanOptions = Partial<typeof SCAN_DEFAULTS> & {
   idleRounds?: number;
+  // Explicit opt-in per invocation; never inferred from a resumed scan.
+  background?: 'experimental';
 };
 class CheckpointError extends Error {}
 export async function scanWatchLater(
@@ -62,6 +64,7 @@ export async function scanWatchLater(
   resume?: Scan,
 ): Promise<Scan> {
   const config = { ...SCAN_DEFAULTS, ...options };
+  const background = options.background === 'experimental';
   // Legacy fixture callers can still request a short settlement window.
   if (options.idleRounds !== undefined)
     config.settleMs = options.idleRounds * Math.max(1, config.intervalMs);
@@ -126,6 +129,12 @@ export async function scanWatchLater(
   let previousContinuation: boolean | undefined;
   let previousExpected = sameDocument ? resume!.expectedCount : null;
   const results: string[] = [];
+  const timerThrottling = {
+    requestedMs: config.intervalMs,
+    lastElapsedMs: 0,
+    maxElapsedMs: 0,
+    delayedWaits: 0,
+  };
   const persist = async () => {
     try {
       await checkpoint(structuredClone(scan));
@@ -170,15 +179,19 @@ export async function scanWatchLater(
       hiddenDuration = 0;
       visibilityAt = wall;
       trackedHidden = hidden;
-      activeMs += elapsed - hiddenElapsed;
-      stallMs += elapsed - hiddenElapsed;
+      // Experimental hidden work consumes the same bounded budget as visible work.
+      const workingElapsed = background ? elapsed : elapsed - hiddenElapsed;
+      activeMs += workingElapsed;
+      stallMs += workingElapsed;
       const previousQuiet = hiddenQuietMs;
       hiddenQuietMs += hiddenElapsed;
       const waitingTime =
         Math.max(0, hiddenQuietMs - config.waitingMs) -
         Math.max(0, previousQuiet - config.waitingMs);
-      attentionMs += waitingTime;
-      totalAttentionMs += waitingTime;
+      if (!background) {
+        attentionMs += waitingTime;
+        totalAttentionMs += waitingTime;
+      }
       if (!hidden && (previousHidden || activatedSinceTick)) {
         hiddenQuietMs = 0;
         attentionMs = 0;
@@ -270,6 +283,8 @@ export async function scanWatchLater(
         activeMs,
         attentionMs,
         totalAttentionMs,
+        backgroundMode: background ? 'experimental' : 'paused',
+        timerThrottling: { ...timerThrottling },
       };
       if (proven && !continuation && time - stableSince >= config.settleMs) {
         // A complete snapshot contains only evidence from this document, never stale resume IDs.
@@ -282,19 +297,22 @@ export async function scanWatchLater(
         break;
       }
       let recoveredThisRound = false;
+      const pausedHidden = hidden && !background;
       if (
-        (hidden ? hiddenQuietMs : stallMs) >= config.waitingMs &&
-        (!approaching || hidden)
+        (pausedHidden ? hiddenQuietMs : stallMs) >= config.waitingMs &&
+        (!approaching || pausedHidden)
       ) {
-        scan.status = hidden ? 'needs_attention' : 'waiting';
-        scan.message = hidden
+        scan.status = pausedHidden ? 'needs_attention' : 'waiting';
+        scan.message = pausedHidden
           ? 'YouTube lädt momentan nicht weiter. Aktiviere den YouTube-Tab, um das Nachladen fortzusetzen.'
           : 'YouTube lädt momentan keine weiteren Videos. Begrenzte Scroll-Wiederherstellung läuft; ggf. nicht verfügbare Videos in YouTube anzeigen.';
-        scan.diagnostics.reason = hidden
+        scan.diagnostics.reason = pausedHidden
           ? 'background_tab_stalled'
-          : 'waiting_for_youtube';
+          : hidden
+            ? 'background_scan_stalled'
+            : 'waiting_for_youtube';
         if (
-          !hidden &&
+          !pausedHidden &&
           recoveries < config.maxRecoveries &&
           stallMs - lastRecovery >= config.recoveryEveryMs
         ) {
@@ -326,7 +344,7 @@ export async function scanWatchLater(
         break;
       }
       if (
-        !hidden &&
+        !pausedHidden &&
         stallMs >= config.stallMs &&
         (recoveries >= config.maxRecoveries || approaching)
       ) {
@@ -364,8 +382,19 @@ export async function scanWatchLater(
         time - lastSaved >= 15000
       )
         await persist();
-      if (!hidden && !recoveredThisRound) env.advance();
+      if (!pausedHidden && !recoveredThisRound) env.advance();
+      const waitStarted = clock();
       await env.wait(config.intervalMs, signal);
+      const waitedMs = Math.max(0, clock() - waitStarted);
+      timerThrottling.lastElapsedMs = waitedMs;
+      timerThrottling.maxElapsedMs = Math.max(
+        timerThrottling.maxElapsedMs,
+        waitedMs,
+      );
+      // Scheduling delay is observable, its cause is not: this is only a heuristic.
+      // Measure wait alone so checkpoint/DOM processing is not blamed on timers.
+      if (waitedMs > Math.max(config.intervalMs * 2, config.intervalMs + 1000))
+        timerThrottling.delayedWaits++;
     }
     if (['running', 'waiting', 'needs_attention'].includes(scan.status)) {
       // maxRounds is a final safety fuse, not the normal completion criterion.

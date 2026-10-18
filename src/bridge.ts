@@ -19,11 +19,29 @@ export async function activateYouTubeTab(tabId: number): Promise<void> {
     throw new Error('YouTube-Fenster nicht gefunden.');
   await browser.windows.update(tab.windowId, { focused: true });
 }
-export async function connectScan(
+export function connectScan(
   tabId: number,
   onCheckpoint: (scan: Scan) => Promise<void>,
   onFinish: (error?: string) => void,
   resume?: Scan,
+  experimentalBackground = false,
+): Promise<Runtime.Port> {
+  return connectRead(tabId, onCheckpoint, onFinish, {
+    type: 'scan',
+    ...(resume ? { resume } : {}),
+    ...(experimentalBackground ? { background: 'experimental' } : {}),
+  });
+}
+
+export async function connectRead<T>(
+  tabId: number,
+  onCheckpoint: (value: T) => Promise<void>,
+  onFinish: (error?: string) => void,
+  request: {
+    type: 'scan' | 'playlists';
+    resume?: Scan;
+    background?: 'experimental';
+  },
 ): Promise<Runtime.Port> {
   const { default: browser } = await import('webextension-polyfill');
   const port = browser.tabs.connect(tabId, { name: 'latersift-readonly-v1' });
@@ -31,6 +49,25 @@ export async function connectScan(
   let closing = false;
   let disconnected = false;
   let tasks = Promise.resolve();
+  // This watchdog runs in the extension page, independently of content/scanner
+  // timers. The ~60s bound only holds while the extension page itself can run;
+  // already queued storage commits must still settle before the terminal callback.
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  const resetWatchdog = () => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      closing = true;
+      void tasks.then(() => {
+        if (finished) return;
+        finished = true;
+        port.disconnect();
+        onFinish(
+          'Seit 60 Sekunden kein Checkpoint empfangen. Der YouTube-Tab ist möglicherweise inaktiv, suspendiert oder gedrosselt. Gesicherte Teilbestände bleiben erhalten; der Lesevorgang ist nicht abgeschlossen.',
+        );
+      });
+    }, 60_000);
+  };
+  resetWatchdog();
   port.onMessage.addListener((message: unknown) => {
     if (
       closing ||
@@ -41,22 +78,25 @@ export async function connectScan(
     )
       return;
     if (message.type === 'checkpoint' && 'scan' in message && 'id' in message) {
+      resetWatchdog();
       // Serialized, even if a future adapter emits faster than storage can commit.
       tasks = tasks
         .then(async () => {
           if (finished) return;
-          await onCheckpoint(message.scan as Scan);
+          await onCheckpoint(message.scan as T);
           if (!disconnected) port.postMessage({ ack: message.id });
         })
         .catch((error) => {
           if (finished) return;
           finished = true;
+          clearTimeout(watchdog);
           port.disconnect();
           onFinish(`Speicherung fehlgeschlagen: ${String(error)}`);
         });
     }
     if (message.type === 'done' || message.type === 'error') {
       closing = true;
+      clearTimeout(watchdog);
       void tasks.then(() => {
         if (!finished) {
           finished = true;
@@ -68,6 +108,7 @@ export async function connectScan(
   });
   port.onDisconnect.addListener(() => {
     disconnected = true;
+    clearTimeout(watchdog);
     if (!finished && !closing) {
       closing = true;
       void tasks.then(() => {
@@ -80,9 +121,10 @@ export async function connectScan(
     }
   });
   try {
-    port.postMessage(resume ? { type: 'scan', resume } : { type: 'scan' });
+    port.postMessage(request);
   } catch (error) {
     finished = true;
+    clearTimeout(watchdog);
     port.disconnect();
     throw error;
   }

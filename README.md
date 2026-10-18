@@ -4,7 +4,7 @@
 
 Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später ansehen“. TypeScript strict, Svelte 5, Firefox Manifest V3, IndexedDB, MIT. Kein Server, keine Telemetrie, keine KI.
 
-> **0.2.2: Manifestversion im Header und integrierte bereinigte YouTube-Dialogdiagnose.** [Diagnose kopieren und Zen-Test](docs/DIALOG-DIAGNOSTICS.md). Neue Save-Sheets bleiben rein lesend, Schreibaktionen dort gesperrt. [Dialogunterstützung, Identitätsbewertung und Zen-Test](docs/M3.1.md).
+> **0.2.3 (Basis 0.2.2): lesender Playlist-Feed im inaktiven Arbeitstab und experimenteller WL-Hintergrundimport.** [M3.2: getrennte Prüfschritte, Grenzen und Zen-Checkliste](docs/M3.2.md). Keine Live-DOM-Aufnahme und kein angemeldeter Zen-Test verfügbar; Feed-Selektoren sind unbestätigte Kandidaten, der Katalog ist niemals als vollständig belegt. Keine neuen Writes, Schreibgates oder Berechtigungen. Die bisherige [bereinigte Dialogdiagnose](docs/DIALOG-DIAGNOSTICS.md) bleibt als erweiterte Vordergrundoption erhalten; neue Save-Sheets bleiben rein lesend ([M3.1](docs/M3.1.md)).
 
 > **M1/M3-Einordnung:** M1 nutzerbestätigt, M3 experimentell und vorläufig. Der Nutzer hat den vollständigen Live-Import **4.926/4.926, `complete`**, einschließlich lokal gespeichertem vollständigem JSON bestätigt. YouTubes „Nicht verfügbare Videos anzeigen“ machte die zuvor fehlenden 240 Einträge sichtbar. Das ist **Nutzerbestätigung, kein eigener automatisierter Live-Nachweis des Agenten**. Der vorhandene M3-Schreibpilot ist noch nicht live abgenommen; reale YouTube-Kompatibilität und ein robust fertiges schreibendes MVP werden nicht behauptet.
 
@@ -21,7 +21,7 @@ Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später a
 
 Details: [Status / Evidenz](docs/STATUS.md), [Architektur](ARCHITECTURE.md), [Testanleitung und erster Live-Pilot](docs/TESTING.md).
 
-## Installation / Upgrade auf 0.2.2
+## Installation / Upgrade auf 0.2.3
 
 Desktop-Firefox oder Zen ab Gecko **142**, Node.js 22.12+ oder 24, pnpm 11:
 
@@ -34,17 +34,27 @@ pnpm package
 ```
 
 1. **Vor dem Upgrade den bestehenden JSON-Export lokal sichern.** Dieselbe Erweiterungs-ID `latersift@almighty-atlas.github.io` und dasselbe Browserprofil beibehalten. Library-Dokumente werden auf Schema 3 migriert; die IndexedDB-Struktur bleibt Version 1, bestehende Entscheidungen und vollständige Snapshots bleiben erhalten. Das ersetzt keine Sicherung gegen Entfernen/Profilverlust.
-2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.2-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Die finale unsignierte XPI wurde gebaut und ebenso wie `dist` erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert.
+2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.3-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Historisch wurden `dist` und die finale 0.2.2-XPI erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert; das ist kein Installations- oder Paketnachweis für 0.2.3. Aktuelle Qualitätsergebnisse ergänzt der Hauptagent in [STATUS.md](docs/STATUS.md).
 3. Zugriff auf `https://www.youtube.com` erlauben; bereits offene YouTube-Tabs nach dem Update neu laden. **Keine neuen Berechtigungen:** weiterhin nur `unlimitedStorage` und die bestehende YouTube-Host-Berechtigung.
 4. Erweiterungssymbol → LaterSift. Vorgeschlagenes Kürzel: `Alt+Shift+L` (in Zen manuell prüfen/anpassen).
-5. Für einen Import im eigenen Konto `https://www.youtube.com/playlist?list=WL` öffnen, im Importdialog Tabs aktualisieren/auswählen und „Read-only-Import neu starten“. YouTube geöffnet und möglichst aktiv lassen, nicht parallel navigieren, umsortieren oder bearbeiten. Fehlende Einträge ggf. selbst mit YouTubes „Nicht verfügbare Videos anzeigen“ einblenden; der Scanner bedient dieses Menü nicht.
-6. Status prüfen und vollständiges JSON lokal speichern. Für M3.1 zunächst ausschließlich **Playlists aus YouTube laden** und Namen/UI-Auswahl vergleichen; siehe [rein lesender Zen-Test](docs/M3.1.md#manueller-zen-test--ausschließlich-lesend). Echte Schreibtests benötigen eine gesonderte Nutzerfreigabe.
+5. Im selben Profil bei YouTube anmelden. Der ausdrückliche Importstart öffnet standardmäßig einen eigenen WL-Arbeitstab mit `active: false`, ohne Fokuswechsel. Die sichtbare Checkbox **„Experimentelles Hintergrund-Scrollen erlauben“ ist vorausgewählt**; Start übernimmt diese Erlaubnis auch für echtes Scrollen bei `hidden`. Andere Tabs können verwendet werden; zuverlässiges Hintergrund-Nachladen ist nicht garantiert. Bei Bedarf während der Arbeit den Aktivieren-Button ausdrücklich klicken. Unter „Erweitert“ bleibt die Auswahl eines vorhandenen eigenen YouTube-Tabs erhalten; dieser wird niemals automatisch geschlossen. Nicht parallel im Scan-Tab navigieren, umsortieren oder bearbeiten. Fehlende Einträge ggf. selbst mit YouTubes „Nicht verfügbare Videos anzeigen“ einblenden; der Scanner bedient dieses Menü nicht.
+6. Status prüfen und vollständiges JSON lokal speichern. **Schritt 1 separat:** Im Archivbereich „Playlists aktualisieren“ liest `/feed/playlists` im inaktiven Arbeitstab; Katalog bleibt Teilbestand, Eigentum unbekannt. **Schritt 2 separat:** WL-Hintergrundimport mit unveränderter Vollständigkeitsprüfung testen. Siehe [M3.2-Checkliste](docs/M3.2.md#manueller-zen-test--ausschließlich-lesend). Die alte Aktion „Playlists aus YouTube laden (Save-Dialog, Vordergrund)“ liegt unter „Erweitert“ und ist nicht der neue Feedscan. Echte Schreibtests benötigen eine gesonderte Nutzerfreigabe.
 
 Temporäre Add-ons verschwinden nach Browser-Neustart. Speicherung kann bei Entfernen/Neuinstallation oder Profilwechsel verloren gehen; vor Upgrade, Entfernen oder Neustart exportieren. Wiederaufnahme setzt erhaltenen Extension-Speicher voraus. Eine JSON-Sicherung ist kein implementierter Restoremechanismus.
 
 ### Dauerhafte Installation / AMO
 
 Die XPI ist ein ZIP-Add-on-Paket, aber **unsigniert**. Firefox Release/ESR verlangt für dauerhafte Installation eine Mozilla-Signatur; Zen separat prüfen. Temporäres Laden ist der Entwicklungsweg. Keine Signierung oder AMO-Veröffentlichung wird behauptet. Für Verteilung sind Mozilla-Signierung, Review und Prüfung über echte Browser-Neustarts erforderlich.
+
+## M3.2: Hintergrundbetrieb und offene Abnahme
+
+- Feed-Identität nur aus echtem `/playlist?list=…`-Link und separatem Titel-DOM derselben Karte; Sichtbarkeit nur aus expliziten Privacy-Badges, Eigentum immer `unknown`. Keine Behauptung über tatsächliche Live-Strukturen; der Katalogscan meldet nie `complete`.
+- Eigene Arbeitstabs tragen UUID-Fragmente und werden per `localStorage`-Journal und Web Locks pro Quelle verwaltet. Cleanup bei Ende/Pause/Fehler und beim Wiederöffnen von LaterSift nur bei exakter eigener Tab-/URL-/Markerzuordnung. Marker verloren: Tab behalten. Crash zwischen Erstellen und Journalpersistenz kann einen Tab zurücklassen; kein unsicheres nachträgliches Adoptieren.
+- Timerverzögerungen sind nur eine Heuristik. Der Read-only-Bridge-Watchdog unterbricht nach 60 Sekunden ohne Checkpoint **nur bei tatsächlich laufenden Extension-Timern**; keine garantierte Laufzeit, Nachladung oder Vollständigkeit.
+- Implementiert ist **A: inaktiver, in der Tab-Leiste sichtbarer Tab**, nicht **B: `tabs.hide`**. Beide Dokumente sind gemäß Page Visibility API im Hintergrund `hidden`; Scroll-/IntersectionObserver-/Timerverhalten ist plattformabhängig und live ungeprüft. B bräuchte zusätzlich `tabHide` und vorherigen Nutzerhinweis; Firefox benachrichtigt beim ersten Verstecken. Keine solche Berechtigung oder Implementierung, keine Stealth-Garantie und keine Konsolen-Berechtigungsumgehung.
+- Historische **4.926/4.926** sind ein Nutzervergleich, kein erwarteter Zähler für heutige Scans. Die originale WL-Vollständigkeitsprüfung und sämtliche Schreibgates bleiben unverändert.
+
+Vertrag, getrennte Abnahmekriterien und Grenzen: [M3.2](docs/M3.2.md). Keine Live-DOM-Aufnahme oder angemeldeter Zen-Test verfügbar.
 
 ## M3: Grenzen des nativen Schreibpiloten
 
@@ -54,7 +64,7 @@ Der Adapter bedient ausschließlich YouTubes nativen **Save/Speichern-Dialog** m
 
 `getPlaylistMembership` öffnet auf Adapterebene einen frischen Dialog. Erst die Extension-Bridge erzwingt vor **jeder** Mitgliedschaftsbeobachtung einen neuen vollständigen Seitenladevorgang (**immer** Hard-Reload mit `bypassCache: true`, auch nach Navigation zu einem anderen Video), damit nicht nur eine optimistisch gesetzte Checkbox desselben SPA-Zustands bestätigt wird. Das ist kein unabhängiger serverseitiger Nachweis und noch keine Live-Kompatibilitätsgarantie.
 
-„Playlists aus YouTube laden“ und der Ausführungsbutton öffnen ausdrücklich einen **eigenen aktiven YouTube-Arbeitstab**. Diesen während des Vorgangs aktiv und das Fenster fokussiert lassen; kein wiederkehrender Autofokus, keine automatische Reaktivierung. Der ursprüngliche Watch-Later-Tab bleibt zur unabhängigen Kontrolle erhalten. Der Arbeitstab bleibt nach Abschluss ebenfalls offen.
+Nur die **erweiterte Legacy-Aktion „Playlists aus YouTube laden (Save-Dialog, Vordergrund)“** und der Schreib-Ausführungsbutton öffnen ausdrücklich einen **eigenen aktiven YouTube-Arbeitstab**. Diesen während des Vorgangs aktiv und das Fenster fokussiert lassen; kein wiederkehrender Autofokus, keine automatische Reaktivierung. Der ursprüngliche Watch-Later-Tab bleibt zur unabhängigen Kontrolle erhalten. Dieser Legacy-Arbeitstab bleibt nach Abschluss ebenfalls offen. Davon getrennt sind der neue Feedscan „Playlists aktualisieren“ und der WL-Import: inaktive markierte Arbeitstabs mit own-only Cleanup, siehe M3.2.
 
 Archivieren prüft das schreibbare Ziel frisch, fügt nur bei Bedarf hinzu und verlangt **erneut frisches `present` vor der WL-Entfernung**, auch wenn das Ziel schon vorhanden war. Bereits extern aus WL verschwundene Videos sind `already_absent`, keine eigene erfolgreiche Änderung. `verified` ist daher nicht automatisch „LaterSift hat etwas geändert“. Mutationen liefern `{ changed: boolean }`; ein No-op zählt auch nach erfolgreicher Zustandsprüfung nicht als tatsächliche Pilotänderung.
 
@@ -79,7 +89,7 @@ pnpm lint:extension
 pnpm exec playwright install --with-deps chromium firefox
 pnpm test:ui                # lokale Fixtures, keine Live-Mutationen
 pnpm test:firefox-extension # frisches Profil, Installations-Smoke-Test
-pnpm package                # artifacts/latersift-0.2.2-unsigned.xpi
+pnpm package                # artifacts/latersift-0.2.3-unsigned.xpi
 ```
 
 Historische lokale Prüffolge für 0.2.0 (aktuelle M3.1-Ergebnisse: [STATUS.md](docs/STATUS.md)): Check (0 Fehler/Warnungen), Lint/Format, **466/466 Vitest-Tests in 14 Dateien**, **48/48 UI-Tests in Chromium/Firefox**, Produktionsbuild, Web-ext (0 Fehler/Warnungen/Hinweise), echte MV3-Installation von `dist` und finaler XPI in Firefox 157 sowie Paketbau. Darunter sechs vollständige Integrationstests mit realem Executor, IndexedDB, Autorisierung, Transport und nativem Adapter gegen **synthetisches DOM, ohne YouTube-Mutation**. Der CI-Nachweis wird nach Veröffentlichung im [Lieferstatus](docs/STATUS.md) verlinkt. DOM-/UI-Fixtures sind keine Live-M3-Abnahme. Für Chromium optional `LATERSIFT_CHROMIUM_PATH=/usr/bin/chromium`; Browserdateien optional über `PLAYWRIGHT_BROWSERS_PATH`. Der Firefox-Smoke-Test nutzt Mozillas RDP auf einem lokalen zufälligen Port und ein frisches Profil, nicht das normale Browserprofil.
@@ -92,7 +102,7 @@ Historische lokale Prüffolge für 0.2.0 (aktuelle M3.1-Ergebnisse: [STATUS.md](
 
 ## Sicherheit und verbleibende Grenzen
 
-Daten, Entscheidungen und Journal liegen lokal in IndexedDB. `unlimitedStorage` erweitert die übliche Origin-Quote, schützt nicht vor voller Platte. Ein Editor pro Extension-Origin per Web Lock und ein separater Writer-Lock schützen vor paralleler Bearbeitung. Speicherung muss bestätigt sein; Fehler stoppen den Fortschritt. Die Event Page öffnet die App und prüft atomare Mutationserlaubnisse; sie führt keine Schreibjobs oder Klicks aus.
+Library-Daten, Entscheidungen und Schreibjournal liegen lokal in IndexedDB. Der neue Playlist-Katalog (einschließlich vorheriger stale Einträge) und das separate Arbeitstab-Journal liegen dagegen im Extension-`localStorage`; sie sind nicht Teil des bisherigen JSON-Backups. `unlimitedStorage` erweitert die übliche Origin-Quote, schützt nicht vor voller Platte. Ein Editor pro Extension-Origin per Web Lock und ein separater Writer-Lock schützen vor paralleler Bearbeitung. Speicherung muss bestätigt sein; Fehler stoppen den Fortschritt. Die Event Page öffnet die App und prüft atomare Mutationserlaubnisse; sie führt keine Schreibjobs oder Klicks aus.
 
 Unveränderte Rechte: nur `unlimitedStorage`, Host `https://www.youtube.com/*`; kein `cookies`, kein `tabs`-Vollzugriff, keine zusätzlichen Privilegien. Die Host-Berechtigung trägt Import und ausdrücklich freigegebene native DOM-Bedienung. Keine OAuth-Schlüssel oder internen YouTube-APIs. Extension-CSP: eigene Netzwerkverbindungen verboten (`connect-src 'none'`). Thumbnails können gewöhnliche Anfragen an YouTube-Bildhosts auslösen (ohne Referrer); keine Übertragung an zusätzliche Dienste.
 
@@ -106,4 +116,4 @@ DOM-Unterstützung ist begrenzt und kann durch YouTube-Änderungen ausfallen. De
 - [Temporäre Installation](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/)
 - [Signierung und Verteilung](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/)
 
-[Repository](https://github.com/almighty-atlas/latersift) · [MIT](LICENSE). Nächster Abnahmeschritt: ausschließlich die **rein lesende Sheet-Erkennung in Zen**. Keine Freigabe für echte Schreibtests in M3.1. Bei nicht unterstützter Struktur stoppen, keine Prüfungen lockern oder Klicks erzwingen; technischen Fehler mit sparsamem, bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. Es wurden keine eigenen Live-Schreibaktionen ausgeführt.
+[Repository](https://github.com/almighty-atlas/latersift) · [MIT](LICENSE). Nächste Abnahmeschritte: **rein lesender Feedscan und separat experimenteller WL-Hintergrundimport in Zen** ([M3.2](docs/M3.2.md)); die erweiterte Sheet-Diagnose bleibt erhalten. Keine Freigabe für echte Schreibtests in M3.2. Bei nicht unterstützter Struktur stoppen, keine Prüfungen lockern oder Klicks erzwingen; technischen Fehler mit sparsamem, bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. Es wurden keine eigenen Live-Schreibaktionen ausgeführt.
