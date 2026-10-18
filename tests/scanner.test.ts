@@ -1081,8 +1081,8 @@ describe('resume evidence and position integrity', () => {
 
 describe('opt-in fast end jumps with the real scroll adapter', () => {
   const options = { background: 'experimental', mode: 'fast-jump' } as const;
-  function growing(total = 300) {
-    const f = fixture(total, 100);
+  function growing(total = 300, initial = 100) {
+    const f = fixture(total, initial);
     f.visibility('hidden');
     Object.defineProperty(f.env.doc, 'defaultView', { value: window });
     const container = f.env.doc.createElement('section');
@@ -1091,7 +1091,7 @@ describe('opt-in fast end jumps with the real scroll adapter', () => {
     container.append(
       f.env.doc.querySelector('ytd-playlist-video-list-renderer')!,
     );
-    let end = 100;
+    let end = initial;
     let failed = false;
     let loading = true;
     const boundaries: number[] = [];
@@ -1547,7 +1547,7 @@ describe('opt-in fast end jumps with the real scroll adapter', () => {
     },
   );
   it('bounds unchanged height and continuation without repeated end jumps or false completion', async () => {
-    const f = growing();
+    const f = growing(30, 10);
     f.stopLoading();
     const result = await scanWatchLater(
       f.env,
@@ -1566,7 +1566,7 @@ describe('opt-in fast end jumps with the real scroll adapter', () => {
     ).toBeGreaterThanOrEqual(8000);
   });
   it('falls back after an end jump fails and stays incomplete', async () => {
-    const f = growing();
+    const f = growing(30, 10);
     f.fail();
     const result = await scanWatchLater(
       f.env,
@@ -1738,7 +1738,7 @@ describe('opt-in fast end jumps with the real scroll adapter', () => {
     },
   );
   it('never completes fast import without a direct total count', async () => {
-    const f = growing(100);
+    const f = growing(10, 10);
     f.env.doc.querySelector('#stats')!.remove();
     const result = await scanWatchLater(
       f.env,
