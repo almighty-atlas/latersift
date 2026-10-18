@@ -2,62 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { scanWatchLater, type ScanEnvironment } from '../src/adapter/scanner';
 import type { Scan } from '../src/model';
 import { createPlaylistScroller } from '../src/adapter/scroll';
+import { createYouTubeAdapter } from '../src/adapter/youtube';
 
-const epoch = Date.UTC(2026, 0, 1);
-const id = (position: number) => String(position).padStart(11, '0');
-function row(position: number, videoId = id(position)) {
-  return `<ytd-playlist-video-renderer><div id="index">${position}</div><a id="video-title" href="/watch?v=${videoId}&list=WL&index=${position}" title="Video ${position}">Video ${position}</a><ytd-channel-name><a>Test channel</a></ytd-channel-name><ytd-thumbnail-overlay-time-status-renderer><span id="text">12:34</span></ytd-thumbnail-overlay-time-status-renderer></ytd-playlist-video-renderer>`;
-}
-function fixture(total: number, initial = Math.min(total, 100)) {
-  const doc = new DOMParser().parseFromString(
-    `<ytd-playlist-header-renderer><div id="stats"><yt-formatted-string>${total.toLocaleString('en-US')} videos</yt-formatted-string><yt-formatted-string>No views</yt-formatted-string></div></ytd-playlist-header-renderer><ytd-playlist-video-list-renderer><div id="contents"></div></ytd-playlist-video-list-renderer>`,
-    'text/html',
-  );
-  let time = epoch;
-  let visibility = 'visible';
-  Object.defineProperty(doc, 'visibilityState', {
-    configurable: true,
-    get: () => visibility,
-  });
-  const render = (
-    start: number,
-    count: number,
-    continuation = start + count - 1 < total,
-  ) => {
-    doc.querySelector('#contents')!.innerHTML =
-      Array.from({ length: count }, (_, i) => row(start + i)).join('') +
-      (continuation
-        ? '<ytd-continuation-item-renderer><div id="trigger"></div></ytd-continuation-item-renderer>'
-        : '');
-  };
-  const env: ScanEnvironment = {
-    doc,
-    documentId: 'document-1',
-    url: () => 'https://www.youtube.com/playlist?list=WL',
-    now: () => time,
-    advance: vi.fn(),
-    wait: vi.fn(async (ms, signal) => {
-      if (signal.aborted) throw new DOMException('Abgebrochen', 'AbortError');
-      time += ms;
-    }),
-  };
-  render(1, initial);
-  return {
-    env,
-    render,
-    elapsed: () => time - epoch,
-    tick: (ms: number) => {
-      time += ms;
-    },
-    visibility: (value: string) => {
-      visibility = value;
-    },
-  };
-}
-const run = (
-  env: ScanEnvironment,
-  checkpoint: (scan: Scan) => Promise<void> = async () => {},
-) => scanWatchLater(env, new AbortController().signal, checkpoint);
+import { epoch, id, fixture, run } from './fixtures/scanner';
 
 async function paused2500() {
   const f = fixture(2501, 500);
@@ -326,68 +273,79 @@ describe('scroll travel and visibility accounting regressions', () => {
         });
     },
   );
-  it('travels through a 100,000px loaded list for over 90 seconds before loading the boundary video', async () => {
-    const f = fixture(2, 1);
-    Object.defineProperty(f.env.doc, 'defaultView', { value: window });
-    const container = f.env.doc.createElement('section');
-    container.style.overflowY = 'auto';
-    f.env.doc.body.append(container);
-    container.append(
-      f.env.doc.querySelector('ytd-playlist-video-list-renderer')!,
-    );
-    Object.defineProperties(container, {
-      scrollHeight: { value: 100000 },
-      clientHeight: { value: 600 },
-      scrollTo: {
-        value: vi.fn((options: ScrollToOptions) => {
-          container.scrollTop = options.top ?? container.scrollTop;
-        }),
-      },
-    });
-    container.scrollTop = 40000;
-    const scroller = createPlaylistScroller(f.env.doc);
-    f.env.resetScroll = () => scroller.reset();
-    f.env.scrollInfo = () => scroller.info();
-    let boundaryAt: number | undefined;
-    const advance = vi.fn((recovery?: boolean) => {
-      scroller.advance(recovery);
-      if (container.scrollTop === 99400 && boundaryAt === undefined) {
-        boundaryAt = f.elapsed();
-        f.render(2, 1, false);
-      }
-    });
-    f.env.advance = advance;
-    const snapshots: Scan[] = [];
-    const result = await run(f.env, async (s) => {
-      snapshots.push(s);
-    });
-    expect(boundaryAt).toBeGreaterThan(90000);
-    expect(boundaryAt).toBeLessThan(200000);
-    expect(snapshots[0].diagnostics?.scroll?.top).toBe(0);
-    expect(
-      snapshots.some(
-        (s) =>
-          s.diagnostics!.activeMs! > 90000 &&
-          s.diagnostics?.confirmedCount === 1,
-      ),
-    ).toBe(true);
-    expect(
-      snapshots.every((s) => s.status === 'running' || s.status === 'complete'),
-    ).toBe(true);
-    expect(advance.mock.calls.every(([recovery]) => !recovery)).toBe(true);
-    expect(result).toMatchObject({
-      status: 'complete',
-      confirmedVideoIds: [id(1), id(2)],
-      diagnostics: {
-        confirmedCount: 2,
-        scroll: { top: 99400 },
-        reason: 'count_and_positions_verified',
-      },
-    });
-    expect(
-      f.env.doc.querySelectorAll('ytd-playlist-video-renderer'),
-    ).toHaveLength(1);
-  });
+  it.each(['visible', 'hidden'])(
+    'travels through a 100,000px loaded list for over 90 seconds before loading the boundary video (%s)',
+    async (visibility) => {
+      const f = fixture(2, 1);
+      f.visibility(visibility);
+      Object.defineProperty(f.env.doc, 'defaultView', { value: window });
+      const container = f.env.doc.createElement('section');
+      container.style.overflowY = 'auto';
+      f.env.doc.body.append(container);
+      container.append(
+        f.env.doc.querySelector('ytd-playlist-video-list-renderer')!,
+      );
+      Object.defineProperties(container, {
+        scrollHeight: { value: 100000 },
+        clientHeight: { value: 600 },
+        scrollTo: {
+          value: vi.fn((options: ScrollToOptions) => {
+            container.scrollTop = options.top ?? container.scrollTop;
+          }),
+        },
+      });
+      container.scrollTop = 40000;
+      const scroller = createPlaylistScroller(f.env.doc);
+      f.env.resetScroll = () => scroller.reset();
+      f.env.scrollInfo = () => scroller.info();
+      let boundaryAt: number | undefined;
+      const advance = vi.fn((recovery?: boolean) => {
+        scroller.advance(recovery);
+        if (container.scrollTop === 99400 && boundaryAt === undefined) {
+          boundaryAt = f.elapsed();
+          f.render(2, 1, false);
+        }
+      });
+      f.env.advance = advance;
+      const snapshots: Scan[] = [];
+      const result = await scanWatchLater(
+        f.env,
+        new AbortController().signal,
+        async (s) => {
+          snapshots.push(s);
+        },
+        visibility === 'hidden' ? { background: 'experimental' } : {},
+      );
+      expect(boundaryAt).toBeGreaterThan(90000);
+      expect(boundaryAt).toBeLessThan(200000);
+      expect(snapshots[0].diagnostics?.scroll?.top).toBe(0);
+      expect(
+        snapshots.some(
+          (s) =>
+            s.diagnostics!.activeMs! > 90000 &&
+            s.diagnostics?.confirmedCount === 1,
+        ),
+      ).toBe(true);
+      expect(
+        snapshots.every(
+          (s) => s.status === 'running' || s.status === 'complete',
+        ),
+      ).toBe(true);
+      expect(advance.mock.calls.every(([recovery]) => !recovery)).toBe(true);
+      expect(result).toMatchObject({
+        status: 'complete',
+        confirmedVideoIds: [id(1), id(2)],
+        diagnostics: {
+          confirmedCount: 2,
+          scroll: { top: 99400 },
+          reason: 'count_and_positions_verified',
+        },
+      });
+      expect(
+        f.env.doc.querySelectorAll('ytd-playlist-video-renderer'),
+      ).toHaveLength(1);
+    },
+  );
 
   it('still stops after 90 seconds when geometry is approaching but scrolling makes no forward progress', async () => {
     const f = fixture(2, 1);
@@ -467,6 +425,307 @@ describe('scroll travel and visibility accounting regressions', () => {
       attentionMs: 0,
       visibility: 'visible',
       confirmedCount: 2,
+    });
+  });
+});
+
+describe('experimental background scanning', () => {
+  const options = { background: 'experimental' } as const;
+  const experimental = (
+    env: ScanEnvironment,
+    checkpoint: (scan: Scan) => Promise<void> = async () => {},
+  ) => scanWatchLater(env, new AbortController().signal, checkpoint, options);
+
+  it('forwards explicit adapter opt-in and collects virtualized hidden rows', async () => {
+    const f = fixture(3, 1);
+    f.visibility('hidden');
+    let position = 1;
+    f.env.advance = vi.fn(() => {
+      if (position < 3) f.render(++position, 1);
+    });
+    const snapshots: Scan[] = [];
+    const result = await createYouTubeAdapter(f.env).scanWatchLater(
+      new AbortController().signal,
+      async (s) => {
+        snapshots.push(s);
+      },
+      undefined,
+      options,
+    );
+    expect(f.env.advance).toHaveBeenCalled();
+    expect(snapshots[0].confirmedVideoIds).toEqual([id(1)]);
+    expect(result).toMatchObject({
+      status: 'complete',
+      confirmedVideoIds: [id(1), id(2), id(3)],
+      diagnostics: {
+        backgroundMode: 'experimental',
+        visibility: 'hidden',
+        reason: 'count_and_positions_verified',
+        activeMs: 5000,
+        attentionMs: 0,
+        timerThrottling: { delayedWaits: 0 },
+      },
+    });
+    expect(result.videos).toHaveLength(3);
+  });
+
+  it('bounds hidden recovery at 20/40/60 seconds and stops at 90 seconds', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    const recoveries: number[] = [];
+    f.env.advance = (recovery) => {
+      if (recovery) recoveries.push(f.elapsed());
+    };
+    const snapshots: Scan[] = [];
+    const result = await experimental(f.env, async (s) => {
+      snapshots.push(s);
+    });
+    expect(recoveries).toEqual([20000, 40000, 60000]);
+    expect(f.elapsed()).toBe(90000);
+    expect(
+      snapshots.find((s) => s.status === 'waiting')?.diagnostics?.reason,
+    ).toBe('background_scan_stalled');
+    expect(snapshots.some((s) => s.status === 'needs_attention')).toBe(false);
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      diagnostics: {
+        reason: 'recovery_exhausted',
+        recoveryAttempts: 3,
+        activeMs: 90000,
+        attentionMs: 0,
+      },
+    });
+  });
+
+  it('detects delayed waits and bounds a throttled hidden scan without catch-up scrolling', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    f.env.wait = vi.fn(async () => {
+      f.tick(60000);
+    });
+    const result = await experimental(f.env);
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      diagnostics: {
+        reason: 'recovery_exhausted',
+        activeMs: 180000,
+        recoveryAttempts: 3,
+        timerThrottling: {
+          requestedMs: 1000,
+          lastElapsedMs: 60000,
+          maxElapsedMs: 60000,
+          delayedWaits: 3,
+        },
+      },
+    });
+    expect(f.env.advance).toHaveBeenCalledTimes(4);
+    expect(f.env.wait).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers hidden loading without bypassing the settlement window', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    const recoveries: number[] = [];
+    f.env.advance = (recovery) => {
+      if (recovery) {
+        recoveries.push(f.elapsed());
+        f.render(2, 1, false);
+      }
+    };
+    const result = await experimental(f.env);
+    expect(recoveries).toEqual([20000]);
+    expect(f.elapsed()).toBe(24000);
+    expect(result.status).toBe('complete');
+    expect(result.diagnostics?.recoveryResults).toContain(
+      'Fortschritt nach Recovery 1',
+    );
+  });
+
+  it('still diagnoses delayed timers without enabling default hidden scrolling', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    f.env.wait = async () => {
+      f.tick(60000);
+    };
+    const result = await run(f.env);
+    expect(f.env.advance).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      diagnostics: {
+        backgroundMode: 'paused',
+        reason: 'attention_timeout',
+        activeMs: 0,
+        timerThrottling: { delayedWaits: 3, maxElapsedMs: 60000 },
+      },
+    });
+  });
+
+  it('stops on checkpoint failure before any hidden scroll', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    await expect(
+      experimental(f.env, async () => {
+        throw new Error('storage unavailable');
+      }),
+    ).rejects.toThrow('Speicherung fehlgeschlagen');
+    expect(f.env.advance).not.toHaveBeenCalled();
+    expect(f.env.wait).not.toHaveBeenCalled();
+  });
+
+  it('interrupts hidden scanning on navigation and persists the partial scan', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    f.env.advance = () => {
+      f.env.url = () => 'https://www.youtube.com/';
+    };
+    const snapshots: Scan[] = [];
+    const result = await experimental(f.env, async (s) => {
+      snapshots.push(s);
+    });
+    expect(result).toMatchObject({
+      status: 'interrupted',
+      confirmedVideoIds: [id(1)],
+      diagnostics: { reason: 'navigation' },
+    });
+    expect(snapshots.at(-1)).toEqual(result);
+  });
+
+  it('does not diagnose slow checkpoints as delayed timers', async () => {
+    const f = fixture(1, 1);
+    f.visibility('hidden');
+    const result = await experimental(f.env, async () => {
+      f.tick(5000);
+    });
+    expect(result.status).toBe('complete');
+    expect(result.diagnostics?.timerThrottling).toMatchObject({
+      lastElapsedMs: 1000,
+      maxElapsedMs: 1000,
+      delayedWaits: 0,
+    });
+  });
+
+  it('charges hidden work against the active time budget', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    const result = await scanWatchLater(
+      f.env,
+      new AbortController().signal,
+      async () => {},
+      { ...options, baseActiveMs: 4000, perVideoMs: 0 },
+    );
+    expect(f.elapsed()).toBe(4000);
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      diagnostics: { reason: 'active_time_budget' },
+    });
+  });
+
+  it.each([
+    'unknown-count',
+    'duplicate-position',
+    'missing-position',
+    'duplicate-id',
+    'changed-position',
+    'unknown-row',
+    'continuation',
+  ])('does not weaken completeness gates: %s', async (kind) => {
+    const f = fixture(2, 2);
+    f.visibility('hidden');
+    const rows = f.env.doc.querySelectorAll('ytd-playlist-video-renderer');
+    if (kind === 'unknown-count') f.env.doc.querySelector('#stats')!.remove();
+    if (kind === 'duplicate-position')
+      rows[1].querySelector('[id="index"]')!.textContent = '1';
+    if (kind === 'missing-position')
+      rows[1].querySelector('[id="index"]')!.remove();
+    if (kind === 'duplicate-id')
+      rows[1].querySelector('a')!.setAttribute('href', `/watch?v=${id(1)}`);
+    if (kind === 'changed-position')
+      f.env.advance = () => {
+        rows[0].querySelector('[id="index"]')!.textContent = '2';
+        rows[1].querySelector('[id="index"]')!.textContent = '1';
+      };
+    if (kind === 'unknown-row')
+      f.env.doc
+        .querySelector('#contents')!
+        .insertAdjacentHTML(
+          'beforeend',
+          '<ytd-playlist-video-renderer></ytd-playlist-video-renderer>',
+        );
+    if (kind === 'continuation') f.render(1, 2, true);
+    const result = await experimental(f.env);
+    expect(result.status).toBe('incomplete');
+    expect(result.diagnostics?.reason).toBe('recovery_exhausted');
+  });
+
+  it.each([false, true])(
+    'preserves resume evidence rules (reload=%s)',
+    async (reload) => {
+      const f = fixture(2, 1);
+      f.visibility('hidden');
+      const control = new AbortController();
+      f.env.advance = () => {
+        control.abort();
+      };
+      const snapshots: Scan[] = [];
+      const resume = await scanWatchLater(
+        f.env,
+        control.signal,
+        async (s) => {
+          snapshots.push(s);
+        },
+        options,
+      );
+      expect(resume.status).toBe('interrupted');
+      expect(snapshots[0].confirmedVideoIds).toEqual([id(1)]);
+      expect(snapshots.at(-1)).toEqual(resume);
+      if (reload) f.env.documentId = 'reloaded-document';
+      const reset = vi.fn();
+      f.env.resetScroll = reset;
+      f.render(2, 1, false);
+      f.env.advance = vi.fn();
+      const result = await scanWatchLater(
+        f.env,
+        new AbortController().signal,
+        async () => {},
+        options,
+        resume,
+      );
+      expect(reset).toHaveBeenCalledTimes(reload ? 1 : 0);
+      expect(result.id).toBe(resume.id);
+      expect(result.startedAt).toBe(resume.startedAt);
+      expect(result.videos).toHaveLength(2);
+      expect(result.status).toBe(reload ? 'incomplete' : 'complete');
+      expect(result.diagnostics?.confirmedCount).toBe(reload ? 1 : 2);
+    },
+  );
+
+  it('does not inherit experimental opt-in from a checkpoint', async () => {
+    const f = fixture(2, 1);
+    f.visibility('hidden');
+    const control = new AbortController();
+    f.env.advance = () => {
+      control.abort();
+    };
+    const resume = await scanWatchLater(
+      f.env,
+      control.signal,
+      async () => {},
+      options,
+    );
+    f.env.advance = vi.fn();
+    const result = await createYouTubeAdapter(f.env).scanWatchLater(
+      new AbortController().signal,
+      async () => {},
+      resume,
+    );
+    expect(f.env.advance).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: 'incomplete',
+      diagnostics: {
+        backgroundMode: 'paused',
+        reason: 'attention_timeout',
+        activeMs: 0,
+      },
     });
   });
 });

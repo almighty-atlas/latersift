@@ -9,7 +9,7 @@ export function createYouTubeAdapter(env: ScanEnvironment): YouTubeAdapter {
       membership: false,
       playbackCheck: false,
     },
-    scanWatchLater: (signal, checkpoint, resume) =>
-      scanWatchLater(env, signal, checkpoint, {}, resume),
+    scanWatchLater: (signal, checkpoint, resume, options) =>
+      scanWatchLater(env, signal, checkpoint, options, resume),
   };
 }

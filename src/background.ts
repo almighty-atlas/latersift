@@ -1,4 +1,10 @@
 import browser from 'webextension-polyfill';
+import type { Runtime } from 'webextension-polyfill';
+import { authorizeContentMutation } from './write-authority';
+browser.runtime.onMessage.addListener(
+  (message: unknown, sender: Runtime.MessageSender) =>
+    authorizeContentMutation(message, sender),
+);
 // No queue execution or timers in the event page. Reopening never performs writes.
 browser.action.onClicked.addListener(async () => {
   const url = browser.runtime.getURL('index.html');

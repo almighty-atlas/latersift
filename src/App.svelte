@@ -19,7 +19,6 @@
     stageCleanup,
     startSession,
     undo,
-    WRITE_GATE,
     type Filter,
   } from './session';
   import {
@@ -34,8 +33,24 @@
     openWatchLater,
     youtubeTabs,
   } from './bridge';
-  import { availabilityLabels, decisionLabels, operationLabels } from './i18n';
+  import { availabilityLabels, decisionLabels } from './i18n';
+  import OperationsPanel from './OperationsPanel.svelte';
+  import PlaylistPanel from './PlaylistPanel.svelte';
+  import WorkTabDiagnostics from './WorkTabDiagnostics.svelte';
+  import {
+    createWorkTab,
+    waitForWorkTab,
+    cleanupOrphanWorkTabs,
+    type WorkTabDiagnostic,
+  } from './work-tabs';
+  import { discoverPlaylists } from './write-bridge';
+  import type { PlaylistChoice } from './operations';
+  import {
+    formatDialogDiagnostic,
+    type DialogDiagnostic,
+  } from './dialog-diagnostics';
   import { watchLaterLocation } from './adapter/dom';
+  import { formatImportDiagnostic } from './import-diagnostics';
   import './style.css';
 
   let lib = $state.raw<Library>(emptyLibrary());
@@ -53,12 +68,31 @@
   let size = $state(25),
     filter = $state<Filter>('all'),
     archiveInput = $state('');
+  let playlistChoices = $state<PlaylistChoice[]>([]);
+  let playlistChoice = $state('');
+  let manifestVersion = $state<string | null>(null);
+  let playlistDiagnostic = $state<DialogDiagnostic | null>(null);
+  let playlistDiagnosticFeedback = $state('');
+  const playlistDiagnosticJSON = $derived(
+    playlistDiagnostic ? formatDialogDiagnostic(playlistDiagnostic) : '',
+  );
+  let operationsBusy = $state(false);
   let cleanupSelected = $state<string[]>([]),
     cleanupConfirm = $state(false);
   let startPoint: { x: number; y: number } | null = null;
   let port = $state.raw<Runtime.Port | null>(null);
   let connectedTab = $state<number | null>(null);
   let pausing = $state(false);
+  let experimentalBackground = $state(true);
+  let fastImport = $state(false);
+  let useExistingTab = $state(false);
+  let importWork: Awaited<ReturnType<typeof createWorkTab>> | null = null;
+  let importTabReports = $state<WorkTabDiagnostic[]>([]);
+  function recordImportTab(report: WorkTabDiagnostic) {
+    if (JSON.stringify(importTabReports.at(-1)) !== JSON.stringify(report))
+      importTabReports = [...importTabReports.slice(-11), report];
+  }
+  let disposed = false;
   let now = $state(Date.now());
   const activeScan = (s: Scan) =>
     ['running', 'waiting', 'needs_attention'].includes(s.status);
@@ -67,13 +101,23 @@
   const card = $derived(currentVideo(lib));
   const decisions = $derived(sessionDecisions(lib));
   const pending = $derived(
-    lib.decisions.filter((d) => d.kind !== 'defer' && d.status === 'pending'),
+    lib.decisions.filter(
+      (d) =>
+        d.kind !== 'defer' &&
+        ['pending', 'failed', 'unknown'].includes(d.status),
+    ),
   );
   const scan = $derived(latestScan(lib));
   const resumable = $derived(scan?.status !== 'complete' ? scan : undefined);
+  const confirmedCount = $derived(
+    scan?.diagnostics?.confirmedCount ??
+      scan?.confirmedVideoIds?.length ??
+      scan?.videos.length ??
+      0,
+  );
   const progressPercent = $derived(
     scan?.expectedCount
-      ? Math.min(100, (scan.videos.length / scan.expectedCount) * 100)
+      ? Math.min(100, (confirmedCount / scan.expectedCount) * 100)
       : null,
   );
   const progressAge = $derived(
@@ -95,52 +139,24 @@
     incomplete: 'Teilbestand / Prüfung offen',
     failed: 'Import fehlgeschlagen',
   };
-  const diagnosticJSON = $derived.by(() => {
-    if (!scan) return '';
-    const d = scan.diagnostics;
-    return JSON.stringify(
-      {
-        count: scan.videos.length,
-        expectedCount: scan.expectedCount,
-        status: scan.status,
-        diagnostics: d
-          ? {
-              lastProgressAt: d.lastProgressAt,
-              visibility: d.visibility,
-              reason: d.reason,
-              highestPosition: d.highestPosition,
-              missingPositions: d.missingPositions,
-              recoveryAttempts: d.recoveryAttempts,
-              recoveryResults: d.recoveryResults,
-              positionConflict: d.positionConflict,
-              activeMs: d.activeMs,
-              attentionMs: d.attentionMs,
-              totalAttentionMs:
-                'totalAttentionMs' in d ? d.totalAttentionMs : undefined,
-              scroll: d.scroll
-                ? {
-                    container: d.scroll.container,
-                    top: d.scroll.top,
-                    height: d.scroll.height,
-                    viewport: d.scroll.viewport,
-                  }
-                : null,
-              continuation: d.continuation,
-              confirmedCount: d.confirmedCount,
-            }
-          : null,
-      },
-      null,
-      2,
-    );
-  });
+  const diagnosticJSON = $derived(scan ? formatImportDiagnostic(scan) : '');
   const cleanup = $derived(videos.filter(safeCandidate));
-  const disabled = $derived(!ready || !owner || busy || importing);
+  const disabled = $derived(
+    !ready || !owner || busy || importing || operationsBusy,
+  );
   const hasDuration = $derived(videos.some((v) => v.durationSeconds !== null));
   const hasPosition = $derived(videos.some((v) => v.position !== null));
 
   onMount(() => {
-    let disposed = false;
+    disposed = false;
+    void import('webextension-polyfill')
+      .then(({ default: browser }) => {
+        const version = browser.runtime.getManifest().version;
+        if (!disposed) manifestVersion = version;
+      })
+      .catch(() => {
+        /* Local UI previews have no installed manifest. */
+      });
     const timer = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -155,6 +171,11 @@
         }
         owner = true;
         try {
+          try {
+            await cleanupOrphanWorkTabs();
+          } catch (e) {
+            error = `Arbeitstab-Bereinigung nicht möglich; lokale Daten bleiben verfügbar: ${String(e)}`;
+          }
           const loaded = await loadLibrary();
           const interrupted = latestScan(loaded);
           if (interrupted && activeScan(interrupted)) {
@@ -180,6 +201,9 @@
       disposed = true;
       clearInterval(timer);
       port?.disconnect();
+      void importWork?.close().catch(() => {
+        /* Startup cleanup retains the journal. */
+      });
       releaseLock?.();
     };
   });
@@ -278,13 +302,26 @@
     }
   }
   async function importVideos(resume?: Scan) {
-    if (disabled || !selectedTab) return;
-    const tabId = Number(selectedTab);
+    if (disabled || (useExistingTab && !selectedTab)) return;
     importing = true;
+    importTabReports = [];
     pausing = false;
     feedback = '';
     error = '';
     try {
+      let tabId: number;
+      if (useExistingTab) tabId = Number(selectedTab);
+      else {
+        importWork = await createWorkTab('watch-later');
+        connectedTab = importWork.tabId;
+        await waitForWorkTab(importWork.tabId, recordImportTab);
+        if (disposed) {
+          await importWork.close();
+          importWork = null;
+          return;
+        }
+        tabId = importWork.tabId;
+      }
       port = await connectScan(
         tabId,
         async (checkpoint) => {
@@ -293,6 +330,13 @@
           lib = copy;
         },
         async (message) => {
+          try {
+            await importWork?.close();
+          } catch (e) {
+            error = `Arbeitstab konnte nicht bereinigt werden: ${String(e)}`;
+          }
+          importWork = null;
+          connectedTab = null;
           importing = false;
           pausing = false;
           port = null;
@@ -318,12 +362,21 @@
             : 'Import gespeichert';
         },
         resume ? structuredClone(resume) : undefined,
+        experimentalBackground,
+        fastImport,
       );
       connectedTab = tabId;
     } catch (e) {
+      try {
+        await importWork?.close();
+      } catch (cleanupError) {
+        error = `Bereinigung fehlgeschlagen: ${String(cleanupError)}. `;
+      }
+      importWork = null;
+      connectedTab = null;
       importing = false;
       port = null;
-      error = `Import konnte nicht gestartet werden: ${String(e)}`;
+      error += `Import konnte nicht gestartet werden: ${String(e)}`;
     }
   }
   function exportJSON() {
@@ -335,6 +388,40 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     feedback = 'JSON-Export erstellt · keine automatische Wiederherstellung';
+  }
+  async function commitOperations(copy: Library) {
+    await saveLibrary(copy);
+    lib = copy;
+  }
+  async function loadPlaylistsFromDialog() {
+    if (disabled || !videos[0]) return;
+    busy = true;
+    error = '';
+    playlistChoices = [];
+    playlistChoice = '';
+    playlistDiagnostic = null;
+    playlistDiagnosticFeedback = '';
+    try {
+      playlistChoices = await discoverPlaylists(videos[0].id, (report) => {
+        playlistDiagnostic = report;
+      });
+      if (!playlistChoices.length)
+        error =
+          'Keine Playlist-Einträge im unterstützten Save-Dialog gefunden.';
+    } catch (e) {
+      error = `Playlists konnten nicht aus YouTube geladen werden: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      busy = false;
+    }
+  }
+  async function copyPlaylistDiagnostic() {
+    try {
+      await navigator.clipboard.writeText(playlistDiagnosticJSON);
+      playlistDiagnosticFeedback = 'Bereinigte Diagnose kopiert.';
+    } catch {
+      playlistDiagnosticFeedback =
+        'Kopieren nicht möglich. Diagnose markieren und manuell kopieren.';
+    }
   }
   async function saveArchive() {
     const id = playlistId(archiveInput);
@@ -361,6 +448,11 @@
     }
   }
   function keydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && panel) {
+      e.preventDefault();
+      closePanel();
+      return;
+    }
     if (
       (e.target instanceof Element &&
         e.target.closest('input,select,textarea,button,a,[contenteditable]')) ||
@@ -406,17 +498,15 @@
       void act(dx < 0 ? 'remove' : 'archive');
     else if (dy > 85 && dy > Math.abs(dx) * 1.3) void act('defer');
   }
+  function closePanel() {
+    if (!operationsBusy && !busy) panel = null;
+  }
   function focusTrap(node: HTMLElement) {
     const prior = document.activeElement;
     const selector =
       'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea,summary,[tabindex="0"]';
     queueMicrotask(() => node.querySelector<HTMLElement>(selector)?.focus());
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        panel = null;
-        return;
-      }
       if (e.key !== 'Tab') return;
       const focusable = [...node.querySelectorAll<HTMLElement>(selector)];
       const first = focusable[0],
@@ -447,19 +537,27 @@
 <div class="shell" class:has-library={videos.length > 0} inert={panel !== null}>
   <header>
     <a class="brand" href="index.html" aria-label="LaterSift Startseite"
-      ><span class="brand-icon" aria-hidden="true">L<span>▸</span></span
-      >LaterSift<span class="version">LOCAL / 0.1</span></a
+      ><span class="brand-icon" aria-hidden="true">L<span>▸</span></span><span
+        class="brand-title"
+        >LaterSift<span class="version"
+          >{manifestVersion ? `v${manifestVersion}` : 'Version unbekannt'}</span
+        ></span
+      ></a
     >
     <nav aria-label="Werkzeuge">
       <button
         class="quiet"
         onclick={showImport}
-        disabled={!ready || !owner || busy}>↓ Import</button
+        disabled={!ready || !owner || busy || operationsBusy}>↓ Import</button
       >
       <button
         class="quiet"
         onclick={exportJSON}
-        disabled={!ready || importing || !scan}>↗ Backup</button
+        disabled={!ready || importing || operationsBusy || !scan}
+        >↗ Backup</button
+      >
+      <button class="quiet" onclick={() => (panel = 'archive')} {disabled}
+        >Playlists</button
       >
       <button
         class="queue-count"
@@ -470,9 +568,9 @@
   </header>
 
   <div class="safety-note">
-    <span class="dot"></span> Read-only-Vorabversion
-    <span class="separator">·</span> Entscheidungen bleiben lokal. YouTube wird nicht
-    verändert.
+    <span class="dot"></span> Lokal vormerken
+    <span class="separator">·</span> YouTube-Änderungen nur im Schreibpilot nach genauer
+    Auswahl und ausdrücklicher Freigabe.
   </div>
   {#if error}<div role="alert" class="error">{error}</div>{/if}
   <main>
@@ -503,8 +601,8 @@
         <div class="empty-icon" aria-hidden="true">▤</div>
         <h2>Dein „Später“ beginnt hier.</h2>
         <p>
-          Verbinde einen angemeldeten YouTube-Tab.<br />LaterSift liest deine
-          Watch-Later-Liste und sichert sie lokal.
+          Bei YouTube angemeldet? LaterSift öffnet einen inaktiven Arbeitstab.<br
+          />Es liest deine Watch-Later-Liste und sichert sie lokal.
         </p>
         <button class="primary" onclick={showImport} {disabled}
           >Watch Later importieren <span>↗</span></button
@@ -611,7 +709,7 @@
                 {lib.session?.paused
                   ? 'Dein Fortschritt ist lokal gespeichert.'
                   : lib.session
-                    ? `${decisions.length} Entscheidungen gespeichert. Noch keine Änderungen an YouTube.`
+                    ? `${decisions.length} Entscheidungen lokal gespeichert. YouTube-Ergebnisse stehen in den Vormerkungen.`
                     : 'Standardmäßig 25 Videos. Du bestimmst das Tempo.'}
               </p>
               {#if lib.session && !lib.session.paused}
@@ -629,6 +727,12 @@
                     >{decisions.filter((d) => d.kind === 'defer').length} Zurückstellen</span
                   >
                 </div>
+              {/if}
+              {#if lib.session && !lib.session.paused && pending.some((d) => d.sessionId === lib.session?.id)}
+                <button onclick={() => (panel = 'queue')} {disabled}
+                  >{pending.filter((d) => d.sessionId === lib.session?.id)
+                    .length} Änderungen auf YouTube anwenden</button
+                >
               {/if}
               {#if lib.session?.paused}<button
                   class="primary"
@@ -712,33 +816,59 @@
           <button
             class="close"
             aria-label="Dialog schließen"
-            onclick={() => (panel = null)}>×</button
+            disabled={operationsBusy || busy}
+            onclick={closePanel}>×</button
           >
         </div>
         {#if panel === 'import'}
           <h2 id="panel-title">Watch Later lokal sichern.</h2>
           <p>
-            Öffne YouTube, melde dich an und zeige die Playlist „Später
-            ansehen“. Der Scan scrollt den ausgewählten Tab. Nutze ihn
-            währenddessen nicht anderweitig.
+            Start öffnet einen inaktiven Arbeitstab ohne Fokuswechsel. Du kannst
+            andere Tabs verwenden. Hintergrund-Nachladen ist experimentell: Bei
+            Blockaden bleibt der Teilbestand gesichert. Der Arbeitstab wird nach
+            Ende oder Pause aufgeräumt; Fortsetzen bestätigt die IDs erneut.
           </p>
-          <div class="inline-actions">
-            <button onclick={openYouTube} disabled={importing}
-              >YouTube öffnen ↗</button
-            ><button onclick={refreshTabs} disabled={importing}
-              >Tabs aktualisieren</button
-            >
-          </div>
-          <label for="youtube-tab">Verbundener Watch-Later-Tab</label><select
-            id="youtube-tab"
-            bind:value={selectedTab}
-            disabled={importing}
-            >{#if !tabs.length}<option value=""
-                >Kein passender Tab gefunden</option
-              >{/if}{#each tabs as tab (tab.id)}<option value={String(tab.id)}
-                >{tab.title || `YouTube-Tab ${tab.id}`} (Tab {tab.id})</option
-              >{/each}</select
+          <label
+            ><input
+              type="checkbox"
+              bind:checked={experimentalBackground}
+              disabled={importing}
+            /> Experimentelles Hintergrund-Scrollen erlauben</label
           >
+          <label
+            ><input
+              type="checkbox"
+              bind:checked={fastImport}
+              disabled={importing}
+            /> Schnellimport: direkt ans Listenende springen (experimentell)</label
+          >
+          <details>
+            <summary>Erweitert: vorhandenen YouTube-Tab verwenden</summary>
+            <label
+              ><input
+                type="checkbox"
+                bind:checked={useExistingTab}
+                disabled={importing}
+              /> Eigenen Tab verwenden (wird niemals automatisch geschlossen)</label
+            >
+            <div class="inline-actions">
+              <button onclick={openYouTube} disabled={importing}
+                >YouTube öffnen ↗</button
+              ><button onclick={refreshTabs} disabled={importing}
+                >Tabs aktualisieren</button
+              >
+            </div>
+            <label for="youtube-tab">Verbundener Watch-Later-Tab</label><select
+              id="youtube-tab"
+              bind:value={selectedTab}
+              disabled={importing}
+              >{#if !tabs.length}<option value=""
+                  >Kein passender Tab gefunden</option
+                >{/if}{#each tabs as tab (tab.id)}<option value={String(tab.id)}
+                  >{tab.title || `YouTube-Tab ${tab.id}`} (Tab {tab.id})</option
+                >{/each}</select
+            >
+          </details>
           {#if error}<p role="alert" class="error">{error}</p>{/if}
           <button
             onclick={activateTab}
@@ -747,12 +877,13 @@
               : connectedTab === null && !selectedTab}
             >YouTube-Tab aktivieren ↗</button
           >
+          <WorkTabDiagnostics reports={importTabReports} />
           {#if importing && !scan}<p>
               Import wird vorbereitet … Noch kein Checkpoint gesichert.
             </p>{/if}
           {#if scan}<div class="scan-status">
               <strong
-                >{scan.videos.length.toLocaleString('de-DE')} / {scan.expectedCount?.toLocaleString(
+                >{confirmedCount.toLocaleString('de-DE')} / {scan.expectedCount?.toLocaleString(
                   'de-DE',
                 ) ?? '?'} Videos · {progressPercent === null
                   ? 'Prozent unbekannt'
@@ -765,7 +896,13 @@
                   : 'unbekannt'}
               </p>
               <p>{scan.message}</p>
-              <small>Nur lokal gesicherte Checkpoints werden angezeigt.</small>
+              <small
+                >{scan.videos.length} IDs insgesamt lokal erhalten. Nur lokal gesicherte
+                Checkpoints werden angezeigt. Im aktuellen Dokument bestätigte IDs:
+                {scan.diagnostics?.confirmedCount ??
+                  scan.confirmedVideoIds?.length ??
+                  0}.</small
+              >
               <details>
                 <summary>Import-Diagnose (ohne Video-Metadaten)</summary>
                 <textarea
@@ -797,13 +934,13 @@
             {#if resumable}<button
                 class="primary"
                 onclick={() => importVideos(resumable)}
-                disabled={disabled || !selectedTab}
+                disabled={disabled || (useExistingTab && !selectedTab)}
                 >Fortsetzen / erneut versuchen</button
               >{/if}
             <button
               class={resumable ? '' : 'primary'}
               onclick={() => importVideos()}
-              disabled={disabled || !selectedTab}
+              disabled={disabled || (useExistingTab && !selectedTab)}
               >Read-only-Import neu starten</button
             >
           {/if}
@@ -878,6 +1015,94 @@
             nur lokal gespeichert; seine Existenz, Schreibbarkeit und
             Video-Zugehörigkeiten sind noch nicht geprüft.
           </p>
+          <PlaylistPanel
+            {disabled}
+            onchoose={(id) => {
+              archiveInput = id;
+            }}
+          />
+          <details>
+            <summary>Erweitert: bisherigen Save-Dialog untersuchen</summary>
+            <button
+              onclick={loadPlaylistsFromDialog}
+              disabled={disabled || !videos.length}
+              >Playlists aus YouTube laden (Save-Dialog, Vordergrund)</button
+            >
+            <p class="hint">
+              Nur auf ausdrücklichen Start: öffnet einen sichtbaren
+              Video-Arbeitstab. Keine automatische Rückkehr. Keine
+              YouTube-Änderungen.
+            </p>
+            {#if playlistDiagnostic}
+              <details class="dialog-diagnostic">
+                <summary>Technische YouTube-Dialogdiagnose</summary>
+                <p class="hint">
+                  UI-Auswahl und belegte Playlist-Identität werden getrennt
+                  erfasst. Ein UI-Zustand beweist keine gespeicherte
+                  Mitgliedschaft. Dieser Bericht enthält keine Playlist-Namen,
+                  IDs oder Attributwerte.
+                </p>
+                <textarea
+                  aria-label="Bereinigte YouTube-Dialogdiagnose"
+                  readonly
+                  rows="12"
+                  value={playlistDiagnosticJSON}
+                ></textarea>
+                <button onclick={copyPlaylistDiagnostic}
+                  >Diagnose kopieren</button
+                >
+                {#if playlistDiagnosticFeedback}<p role="status">
+                    {playlistDiagnosticFeedback}
+                  </p>{/if}
+              </details>
+            {/if}
+            {#if playlistChoices.length}
+              <p class="hint">
+                {playlistChoices.length} Einträge gelesen. Auswahlzustand ist keine
+                bestätigte gespeicherte Mitgliedschaft. Unbestätigte Identitäten sind
+                keine Schreibziele.
+              </p>
+              <ul aria-label="Erkannte YouTube-Playlists">
+                {#each playlistChoices as choice (choice)}
+                  <li>
+                    <strong>{choice.title || 'Name unbekannt'}</strong> ·
+                    {choice.checked === true
+                      ? 'ausgewählt'
+                      : choice.checked === false
+                        ? 'nicht ausgewählt'
+                        : 'Auswahl unbekannt'} ·
+                    {choice.id
+                      ? `ID über Zeilenlink belegt: ${choice.id}`
+                      : 'Identität unbestätigt'}
+                    {#if choice.diagnostic}<p class="hint">
+                        {choice.diagnostic}
+                      </p>{/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            {#if playlistChoices.some((p) => p.id && p.id !== 'WL' && p.writable)}
+              <label for="archive-choice">Schreibbare YouTube-Playlist</label>
+              <select
+                id="archive-choice"
+                bind:value={playlistChoice}
+                onchange={() => {
+                  if (
+                    playlistChoices.some(
+                      (p) => p.id === playlistChoice && p.writable,
+                    )
+                  )
+                    archiveInput = playlistChoice;
+                }}
+                {disabled}
+              >
+                <option value="">Bitte wählen</option>
+                {#each playlistChoices.filter((p) => p.id && p.id !== 'WL' && p.writable) as choice (choice)}<option
+                    value={choice.id}>{choice.title} ({choice.id})</option
+                  >{/each}
+              </select>
+            {/if}
+          </details>
           <label for="archive-url">YouTube-Playlist-URL oder PL…-ID</label
           ><input
             id="archive-url"
@@ -886,47 +1111,25 @@
             placeholder="https://www.youtube.com/playlist?list=PL…"
           />
           <p class="hint">
-            Kein Zugriff auf fremde Zugangsdaten. Es werden keine Playlists
-            erstellt oder verändert.
+            Eine manuelle URL speichert nur das gewünschte Ziel. Sie bestätigt
+            keine Zuordnung zu einem Dialogeintrag und schaltet Schreiben nicht
+            frei.
           </p>
           <button class="primary" onclick={saveArchive} {disabled}
             >Ziel lokal speichern</button
           >
         {:else if panel === 'queue'}
           <h2 id="panel-title">{pending.length} Änderungen vorgemerkt.</h2>
-          <p>{WRITE_GATE}</p>
-          <div class="write-gate">
-            <strong>0 YouTube-Änderungen ausgeführt</strong><span
-              >Kein „Anwenden“-Schalter in dieser Vorabversion.</span
-            >
-          </div>
-          <div class="queue-list">
-            {#each lib.decisions
-              .filter((d) => d.kind !== 'defer')
-              .toReversed() as d (d.id)}<div class="queue-row">
-                <div>
-                  <strong>{decisionLabels[d.kind]}</strong><span
-                    >{videos.find((v) => v.id === d.videoId)?.title ||
-                      d.videoId}</span
-                  ><small
-                    >{operationLabels[d.status]} · {d.id}{d.targetPlaylist
-                      ? ` · Ziel ${d.targetPlaylist}`
-                      : ''}</small
-                  >
-                </div>
-                <button
-                  aria-label={`Vormerkung für ${d.videoId} zurücknehmen`}
-                  onclick={() =>
-                    change((copy) => {
-                      copy.decisions = copy.decisions.filter(
-                        (item) => item.id !== d.id,
-                      );
-                    })}
-                  disabled={disabled || d.status !== 'pending'}>↶</button
-                >
-              </div>{/each}
-          </div>
-          <button onclick={exportJSON} disabled={importing || !scan}
+          <OperationsPanel
+            library={lib}
+            {disabled}
+            oncommit={commitOperations}
+            onbusy={(value) => (operationsBusy = value)}
+          />
+          <button
+            id="operations-backup"
+            onclick={exportJSON}
+            disabled={importing || operationsBusy || !scan}
             >Bestand und Vormerkungen exportieren</button
           >
         {:else if panel === 'cleanup'}

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LaterSift",
-  "version": "0.1.1",
-  "description": "Swipe through your Watch Later backlog. Lokaler Read-only-Import und Swipe-Entscheidungen.",
+  "version": "0.2.12",
+  "description": "Watch Later lokal sichern und durchsehen. Experimenteller YouTube-Schreibpilot nur nach ausdrücklicher Freigabe.",
   "browser_specific_settings": {
     "gecko": {
       "id": "latersift@almighty-atlas.github.io",
