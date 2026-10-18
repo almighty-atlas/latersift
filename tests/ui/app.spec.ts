@@ -433,3 +433,81 @@ test('mobile layout fits and dialog traps focus', async ({
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
+
+// UI transport fixture only. Real DOM/content/bridge coverage lives in write-flow.test.ts.
+test('shows duplicate unidentified playlists as observations without offering them as write targets', async ({
+  page,
+}) => {
+  await seed(page);
+  await page.addInitScript(() => {
+    const id = 'synthetic-ui@latersift';
+    let url = '';
+    const choices = Array.from({ length: 16 }, (_, i) => ({
+      id: null,
+      title: i < 2 ? 'Same playlist name' : `Fixture playlist ${i}`,
+      checked: i === 2 ? null : i % 2 === 0,
+      identity: 'unverified',
+      variant: 'sheet',
+      writable: false,
+      diagnostic:
+        'Keine belegte Playlist-ID: Namen und Auswahlzustand reichen nicht aus.',
+    }));
+    const api = {
+      runtime: { id },
+      tabs: {
+        create: async (options: { url: string }) => {
+          url = options.url;
+          return { id: 123 };
+        },
+        get: async () => ({
+          id: 123,
+          windowId: 456,
+          active: true,
+          status: 'complete',
+          url,
+        }),
+        connect: () => {
+          let reply: (message: unknown) => void;
+          return {
+            onMessage: {
+              addListener: (listener: typeof reply) => {
+                reply = listener;
+              },
+            },
+            onDisconnect: { addListener: () => {} },
+            disconnect: () => {},
+            postMessage: (request: { method: string }) => {
+              if (request.method !== 'playlists')
+                throw new Error('Fixture forbids writes');
+              queueMicrotask(() => reply({ ok: true, result: choices }));
+            },
+          };
+        },
+      },
+      windows: { get: async () => ({ focused: true }) },
+    };
+    Object.assign(globalThis, { chrome: api, browser: api });
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Runde starten' }).click();
+  await page.getByRole('button', { name: 'Runde anpassen' }).click();
+  await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
+  await page
+    .getByRole('button', { name: 'Playlists aus YouTube laden' })
+    .click();
+  const list = page.getByRole('list', { name: 'Erkannte YouTube-Playlists' });
+  await expect(list.getByRole('listitem')).toHaveCount(16);
+  await expect(
+    list.getByText('Same playlist name', { exact: true }),
+  ).toHaveCount(2);
+  await expect(
+    list.getByText('Identität unbestätigt', { exact: false }),
+  ).toHaveCount(16);
+  await expect(
+    list.getByText('Auswahl unbekannt', { exact: false }),
+  ).toHaveCount(1);
+  await expect(page.getByLabel('Schreibbare YouTube-Playlist')).toHaveCount(0);
+  await expect(page.getByLabel('YouTube-Playlist-URL oder PL…-ID')).toHaveValue(
+    'PL1234567890123456',
+  );
+});

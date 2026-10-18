@@ -1,5 +1,24 @@
 # Lieferstatus / Evidenz
 
+## Aktuell: 0.2.1 / M3.1 – 18.10.2026
+
+Neue Sheet-Erkennung und rein lesende Playlist-Diagnose implementiert, basierend auf den vom Nutzer gemeldeten Strukturmerkmalen. Keine eigene angemeldete Live-Validierung. **Sheets sind keine Schreibziele**, selbst mit explizitem Link; ohne Link keine belegte ID. `aria-pressed` bleibt UI-Zustand, Mitgliedschaft `unknown`. Legacy-Sicherheitskette, Journal, Zustimmung und Pilotlimit bleiben wirksam.
+
+Details: [M3.1-Vertrag, Identitätsbewertung, rein lesende Konsolendiagnose und Zen-Abnahme](M3.1.md). Der nächste manuelle Schritt ist ausschließlich „Playlists aus YouTube laden“ und Vergleich der Namen/Auswahlzustände. Keine echten Schreibtests ohne gesonderte Freigabe.
+
+Lokale Prüfungen für 0.2.1:
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check`: erfolgreich.
+- `pnpm test`: **514/514 in 15 Dateien**, darunter **44 neue Sheet-Adapterfälle** und **9 vollständige synthetische Integrationen**. Keine Live-YouTube-Mutation.
+- `pnpm test:ui`: **50/50 in Chromium und Firefox**, ausschließlich lokale Fixtures.
+- `pnpm build`, `pnpm lint:extension`: erfolgreich; **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- Firefox **157.0**: temporäre Installation des echten MV3-Add-ons aus `dist` und der finalen XPI erfolgreich; keine Manifestwarnungen. Installation belegt keine YouTube-Live-Kompatibilität.
+- `pnpm package`: `artifacts/latersift-0.2.1-unsigned.xpi` erstellt, keine Signierung/AMO-Veröffentlichung.
+
+Historische CI-Ergebnisse unten gelten nicht als CI-Nachweis für M3.1. Das neue Artefakt wird durch den vorhandenen Workflow beim Push erneut gebaut.
+
+## Historischer Stand: 0.2.0
+
 Stand: 17.10.2026 · **0.2.0**. M1 ist **nutzerbestätigt abgeschlossen**; M3 ist implementiert, aber **experimentell, vorläufig und noch nicht live abgenommen**. Keine Behauptung eines robust fertigen schreibenden MVP oder tatsächlicher allgemeiner YouTube-Kompatibilität.
 
 ## Evidenz klar trennen
@@ -28,7 +47,7 @@ Der frühere Teilimport in Zen/CachyOS hatte 4.686 statt 4.926 IDs, höchste Pos
 
 - Nativer Save-/Speichern-Dialog mit semantischen Controls und isolierten unterstützten Renderern. Die Watch-URL allein genügt nicht: genau ein sichtbarer `ytd-watch-flexy` muss die angeforderte `video-id` tragen, der Save-Button muss darin liegen. Keine internen Properties oder APIs.
 - **Auch WL verlangt einen expliziten Link `/playlist?list=WL` innerhalb derselben Checkbox-Option**, Archiv entsprechend `list=PL…`. Niemals Label allein: eine eigene Playlist namens „Watch later“ darf keinen WL-False-Match auslösen. Ohne WL-Link kein Remove; fehlende Identität ist `unknown`, nicht `absent`.
-- Viele aktuelle YouTube-Varianten exponieren diese Links nicht: **Alle Mutationen können unsupported sein**, nicht nur Archivieren. Ehrliche fail-closed Grundlage, aktuelle Live-Kompatibilität unbekannt. Manuelle URL/ID und Titelzuordnung sind kein Bypass. `getAvailablePlaylists` scheitert bei **jeder** nicht identifizierbaren Zeile.
+- Viele aktuelle YouTube-Varianten exponieren diese Links nicht: **Alle Mutationen können unsupported sein**, nicht nur Archivieren. Ehrliche fail-closed Grundlage, aktuelle Live-Kompatibilität unbekannt. Manuelle URL/ID und Titelzuordnung sind kein Bypass. Ab M3.1 gibt `getAvailablePlaylists` nicht identifizierte Zeilen nur zur Diagnose zurück; sie bleiben nicht schreibbar.
 - `getPlaylistMembership` öffnet einen frischen Dialog; die Bridge erzwingt vor **jeder** Mitgliedschaftsbeobachtung zusätzlich `reload(..., { bypassCache: true })`, **auch nach Videowechsel**. Navigation allein oder optimistisches Checkbox-Feedback reicht nicht; diese DOM-Evidenz ersetzt keinen Live-Test.
 - Discovery- und Ausführungsbutton öffnen ausdrücklich einen eigenen aktiven YouTube-Arbeitstab. Aktiv/fokussiert halten; keine wiederholte automatische Aktivierung. Original-WL-Tab und Arbeitstab bleiben zur unabhängigen Prüfung erhalten.
 
@@ -62,6 +81,6 @@ Vollständige lokale Prüffolge für 0.2.0 am 17.10.2026:
 
 Die vorhandene geprüfte CI enthält bereits die Prüfbefehle und Artefaktbereitstellung; keine Workflow-Änderung nötig. Für Implementierungscommit `b35391d` waren sowohl die [Push-CI](https://github.com/almighty-atlas/latersift/actions/runs/39068907126) als auch die [PR-CI](https://github.com/almighty-atlas/latersift/actions/runs/39068910728) erfolgreich. [PR #2](https://github.com/almighty-atlas/latersift/pull/2) bleibt für Review und die ausdrücklich freigegebene manuelle Pilot-Abnahme offen; Folgeänderungen werden erneut geprüft. Testpaket: `artifacts/latersift-0.2.0-unsigned.xpi` sowie CI-Artefakt `latersift-unsigned`. Reproduktion und manuelle Kriterien: [TESTING.md](TESTING.md).
 
-Der nächste Live-Schritt ist **genau ein bewusst ausgewähltes entbehrliches Video**, vorzugsweise **gewöhnliches Entfernen zuerst**, mit lokalem vollständigem Backup und unverändert geöffnetem Original-WL-Tab. Ergebnis zusätzlich direkt in YouTube prüfen. Bei nicht unterstütztem DOM oder `unknown` stoppen: keine Gates lockern, Klicks erzwingen, Limits erhöhen oder Speicherzustände umschreiben. Technischen Fehler mit minimalem bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. [Detaillierter erster Pilot](TESTING.md#erster-m3-live-pilot-genau-eine-entscheidung).
+Der historische M3-Schreibpilot (nicht Teil der aktuellen Freigabe) wäre **genau ein bewusst ausgewähltes entbehrliches Video**, vorzugsweise **gewöhnliches Entfernen zuerst**, mit lokalem vollständigem Backup und unverändert geöffnetem Original-WL-Tab. Ergebnis zusätzlich direkt in YouTube prüfen. Bei nicht unterstütztem DOM oder `unknown` stoppen: keine Gates lockern, Klicks erzwingen, Limits erhöhen oder Speicherzustände umschreiben. Technischen Fehler mit minimalem bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. [Detaillierter erster Pilot](TESTING.md#erster-m3-live-pilot-genau-eine-entscheidung).
 
 Keine Live-M3-Abnahme, garantierte Wiederherstellung oder fertige allgemeine YouTube-Schreibkompatibilität behauptet. Signierung und dauerhafte Installation bleiben separate Betriebsprüfungen, keine Voraussetzung für eine erfundene Erfolgsmeldung.

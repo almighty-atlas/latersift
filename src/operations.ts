@@ -9,9 +9,14 @@ import { playlistId } from './session';
 import { claimExecution } from './storage';
 
 export interface PlaylistChoice {
-  id: string;
+  id: string | null;
   title: string;
   writable: boolean;
+  // Discovery observations, never persisted membership evidence.
+  checked?: boolean | null;
+  identity?: 'explicit-link' | 'unverified';
+  variant?: 'legacy' | 'sheet';
+  diagnostic?: string;
 }
 export interface MembershipEvidence {
   state: 'present' | 'absent' | 'unknown';

@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { saveSheet } from './fixtures/save-sheet';
 import { deleteDB, openDB } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Runtime, Tabs } from 'webextension-polyfill';
@@ -15,7 +16,7 @@ import {
   saveLibrary,
 } from '../src/storage';
 import { authorizeContentMutation } from '../src/write-authority';
-import { createWriteBridge } from '../src/write-bridge';
+import { createWriteBridge, discoverPlaylists } from '../src/write-bridge';
 import { installWriteChannel } from '../src/write-content';
 import {
   AUTHORIZE_MUTATION,
@@ -88,6 +89,7 @@ let page: Map<string, boolean>;
 let optimisticOnly: boolean;
 let disconnectAfterClick: boolean;
 let unknownWL: boolean;
+let useSheet: boolean;
 let disconnectPort: () => void;
 let clicks: string[];
 let requests: WriteRequest[];
@@ -114,6 +116,17 @@ function rebuildDocument() {
     trace.push('open');
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
+    if (useSheet) {
+      dialog.innerHTML = saveSheet();
+      dialog.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') dialog.remove();
+      });
+      dialog.addEventListener('click', () =>
+        clicks.push('unexpected-sheet-click'),
+      );
+      document.body.append(dialog);
+      return;
+    }
     dialog.innerHTML = `<ytd-add-to-playlist-renderer>${[TARGET, 'WL'].map((id) => `<ytd-playlist-add-to-option-renderer><div role="checkbox" aria-label="${id === 'WL' ? 'Watch later' : 'Synthetic archive'}" aria-checked="${id === 'WL' && unknownWL ? 'mixed' : String(page.get(id))}"></div><a href="https://www.youtube.com/playlist?list=${id}">${id}</a></ytd-playlist-add-to-option-renderer>`).join('')}<button aria-label="Close">Close</button></ytd-add-to-playlist-renderer>`;
     dialog
       .querySelector('button')!
@@ -281,6 +294,7 @@ beforeEach(async () => {
   optimisticOnly = false;
   disconnectAfterClick = false;
   unknownWL = false;
+  useSheet = false;
   clicks = [];
   requests = [];
   trace = [];
@@ -558,4 +572,36 @@ describe('full synthetic write flow — real storage, authority, bridge, content
     expect(permits).toEqual([]);
     expect(requests.map((r) => r.method)).toEqual(['membership']);
   });
+});
+
+describe('new sheet through the complete real safety chain — synthetic only', () => {
+  it('returns 16 unidentified read-only observations through content and bridge without permits', async () => {
+    useSheet = true;
+    const choices = await drive(discoverPlaylists(VIDEO));
+    expect(choices).toHaveLength(16);
+    expect(
+      choices.every(
+        (p) => p.id === null && p.identity === 'unverified' && !p.writable,
+      ),
+    ).toBe(true);
+    expect(choices[0]).toMatchObject({ title: 'Watch later', checked: true });
+    expect(clicks).toEqual([]);
+    expect(permits).toEqual([]);
+    expect(requests.map((r) => r.method)).toEqual(['playlists']);
+    expect(document.querySelector('yt-sheet-view-model')).not.toBeNull();
+  });
+  it.each(['remove', 'archive'] as const)(
+    'blocks approved %s at the fresh membership preflight without a permit or playlist click',
+    async (kind) => {
+      useSheet = true;
+      const { result } = await run(kind);
+      expect(result.decisions[0].status).toBe('unknown');
+      expect(clicks).toEqual([]);
+      expect(permits).toEqual([]);
+      expect(requests.map((r) => r.method)).toEqual(['membership']);
+      expect(trace).toContain('reload');
+      expect(backend.get('WL')).toBe(true);
+      expect(backend.get(TARGET)).toBe(false);
+    },
+  );
 });

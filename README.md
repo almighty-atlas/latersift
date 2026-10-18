@@ -4,7 +4,9 @@
 
 Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später ansehen“. TypeScript strict, Svelte 5, Firefox Manifest V3, IndexedDB, MIT. Kein Server, keine Telemetrie, keine KI.
 
-> **0.2.0: M1 nutzerbestätigt, M3 experimentell und vorläufig.** Der Nutzer hat den vollständigen Live-Import **4.926/4.926, `complete`**, einschließlich lokal gespeichertem vollständigem JSON bestätigt. YouTubes „Nicht verfügbare Videos anzeigen“ machte die zuvor fehlenden 240 Einträge sichtbar. Das ist **Nutzerbestätigung, kein eigener automatisierter Live-Nachweis des Agenten**. Der vorhandene M3-Schreibpilot ist noch nicht live abgenommen; reale YouTube-Kompatibilität und ein robust fertiges schreibendes MVP werden nicht behauptet.
+> **0.2.1 / M3.1: neues Save-Sheet rein lesend, Schreibaktionen dort gesperrt.** [Dialogunterstützung, Identitätsbewertung und Zen-Test](docs/M3.1.md).
+
+> **M1/M3-Einordnung:** M1 nutzerbestätigt, M3 experimentell und vorläufig. Der Nutzer hat den vollständigen Live-Import **4.926/4.926, `complete`**, einschließlich lokal gespeichertem vollständigem JSON bestätigt. YouTubes „Nicht verfügbare Videos anzeigen“ machte die zuvor fehlenden 240 Einträge sichtbar. Das ist **Nutzerbestätigung, kein eigener automatisierter Live-Nachweis des Agenten**. Der vorhandene M3-Schreibpilot ist noch nicht live abgenommen; reale YouTube-Kompatibilität und ein robust fertiges schreibendes MVP werden nicht behauptet.
 
 ## Funktionsumfang
 
@@ -19,7 +21,7 @@ Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später a
 
 Details: [Status / Evidenz](docs/STATUS.md), [Architektur](ARCHITECTURE.md), [Testanleitung und erster Live-Pilot](docs/TESTING.md).
 
-## Installation / Upgrade auf 0.2.0
+## Installation / Upgrade auf 0.2.1
 
 Desktop-Firefox oder Zen ab Gecko **142**, Node.js 22.12+ oder 24, pnpm 11:
 
@@ -32,11 +34,11 @@ pnpm package
 ```
 
 1. **Vor dem Upgrade den bestehenden JSON-Export lokal sichern.** Dieselbe Erweiterungs-ID `latersift@almighty-atlas.github.io` und dasselbe Browserprofil beibehalten. Library-Dokumente werden auf Schema 3 migriert; die IndexedDB-Struktur bleibt Version 1, bestehende Entscheidungen und vollständige Snapshots bleiben erhalten. Das ersetzt keine Sicherung gegen Entfernen/Profilverlust.
-2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.0-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Die finale unsignierte XPI wurde gebaut und ebenso wie `dist` erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert.
+2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.1-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Die finale unsignierte XPI wurde gebaut und ebenso wie `dist` erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert.
 3. Zugriff auf `https://www.youtube.com` erlauben; bereits offene YouTube-Tabs nach dem Update neu laden. **Keine neuen Berechtigungen:** weiterhin nur `unlimitedStorage` und die bestehende YouTube-Host-Berechtigung.
 4. Erweiterungssymbol → LaterSift. Vorgeschlagenes Kürzel: `Alt+Shift+L` (in Zen manuell prüfen/anpassen).
 5. Für einen Import im eigenen Konto `https://www.youtube.com/playlist?list=WL` öffnen, im Importdialog Tabs aktualisieren/auswählen und „Read-only-Import neu starten“. YouTube geöffnet und möglichst aktiv lassen, nicht parallel navigieren, umsortieren oder bearbeiten. Fehlende Einträge ggf. selbst mit YouTubes „Nicht verfügbare Videos anzeigen“ einblenden; der Scanner bedient dieses Menü nicht.
-6. Status prüfen und vollständiges JSON lokal speichern. **Nicht direkt eine große Warteschlange anwenden.** Für den ersten Schreibversuch genau ein bewusst ausgewähltes entbehrliches Video und vorzugsweise gewöhnliches Entfernen verwenden; siehe [Pilotablauf](docs/TESTING.md#erster-m3-live-pilot-genau-eine-entscheidung).
+6. Status prüfen und vollständiges JSON lokal speichern. Für M3.1 zunächst ausschließlich **Playlists aus YouTube laden** und Namen/UI-Auswahl vergleichen; siehe [rein lesender Zen-Test](docs/M3.1.md#manueller-zen-test--ausschließlich-lesend). Echte Schreibtests benötigen eine gesonderte Nutzerfreigabe.
 
 Temporäre Add-ons verschwinden nach Browser-Neustart. Speicherung kann bei Entfernen/Neuinstallation oder Profilwechsel verloren gehen; vor Upgrade, Entfernen oder Neustart exportieren. Wiederaufnahme setzt erhaltenen Extension-Speicher voraus. Eine JSON-Sicherung ist kein implementierter Restoremechanismus.
 
@@ -48,7 +50,7 @@ Die XPI ist ein ZIP-Add-on-Paket, aber **unsigniert**. Firefox Release/ESR verla
 
 Der Adapter bedient ausschließlich YouTubes nativen **Save/Speichern-Dialog** mit isolierten unterstützten Renderern. Zusätzlich zur URL muss genau ein sichtbarer `ytd-watch-flexy` die angeforderte `video-id` tragen; der Save-Button muss darin liegen. **Die URL allein reicht nicht.** Keine internen Properties, Tokens oder APIs.
 
-**Alle Playlist-Identitäten, auch WL, verlangen einen expliziten Playlist-Link innerhalb derselben Checkbox-Option.** Für Entfernen ist `/playlist?list=WL` erforderlich; „Watch later“ / „Später ansehen“ als Label allein ist niemals Identitätsbeleg (eine eigene Playlist könnte genauso heißen). Ohne WL-Link kein Remove. `getAvailablePlaylists` scheitert bei jeder nicht identifizierbaren Zeile. Viele aktuelle YouTube-Varianten enthalten diese Links nicht: Dann können **sämtliche Mutationen nicht unterstützt** sein, nicht nur der Archiv-Picker. Das ist eine konservative technische Grundlage mit **fail closed**, keine bestätigte Live-Kompatibilität. Titelzuordnung und manuelle Archiv-URL sind kein Bypass.
+**Alle Playlist-Identitäten, auch WL, verlangen einen expliziten Playlist-Link innerhalb derselben Checkbox-Option.** Für Entfernen ist `/playlist?list=WL` erforderlich; „Watch later“ / „Später ansehen“ als Label allein ist niemals Identitätsbeleg (eine eigene Playlist könnte genauso heißen). Ohne WL-Link kein Remove. `getAvailablePlaylists` zeigt nicht identifizierbare Zeilen jetzt ausdrücklich als Diagnose mit `id: null`, `identity: unverified` und `writable: false`. Das neue Save-Sheet liefert Namen und `aria-pressed`, aber keine belastbare ID-Zuordnung im gemeldeten DOM; Schreiben bleibt gesperrt. Viele aktuelle YouTube-Varianten enthalten diese Links nicht: Dann können **sämtliche Mutationen nicht unterstützt** sein, nicht nur der Archiv-Picker. Das ist eine konservative technische Grundlage mit **fail closed**, keine bestätigte Live-Kompatibilität. Titelzuordnung und manuelle Archiv-URL sind kein Bypass.
 
 `getPlaylistMembership` öffnet auf Adapterebene einen frischen Dialog. Erst die Extension-Bridge erzwingt vor **jeder** Mitgliedschaftsbeobachtung einen neuen vollständigen Seitenladevorgang (**immer** Hard-Reload mit `bypassCache: true`, auch nach Navigation zu einem anderen Video), damit nicht nur eine optimistisch gesetzte Checkbox desselben SPA-Zustands bestätigt wird. Das ist kein unabhängiger serverseitiger Nachweis und noch keine Live-Kompatibilitätsgarantie.
 
@@ -77,10 +79,10 @@ pnpm lint:extension
 pnpm exec playwright install --with-deps chromium firefox
 pnpm test:ui                # lokale Fixtures, keine Live-Mutationen
 pnpm test:firefox-extension # frisches Profil, Installations-Smoke-Test
-pnpm package                # artifacts/latersift-0.2.0-unsigned.xpi
+pnpm package                # artifacts/latersift-0.2.1-unsigned.xpi
 ```
 
-Die vollständige lokale Prüffolge für 0.2.0 war erfolgreich: Check (0 Fehler/Warnungen), Lint/Format, **466/466 Vitest-Tests in 14 Dateien**, **48/48 UI-Tests in Chromium/Firefox**, Produktionsbuild, Web-ext (0 Fehler/Warnungen/Hinweise), echte MV3-Installation von `dist` und finaler XPI in Firefox 157 sowie Paketbau. Darunter sechs vollständige Integrationstests mit realem Executor, IndexedDB, Autorisierung, Transport und nativem Adapter gegen **synthetisches DOM, ohne YouTube-Mutation**. Der CI-Nachweis wird nach Veröffentlichung im [Lieferstatus](docs/STATUS.md) verlinkt. DOM-/UI-Fixtures sind keine Live-M3-Abnahme. Für Chromium optional `LATERSIFT_CHROMIUM_PATH=/usr/bin/chromium`; Browserdateien optional über `PLAYWRIGHT_BROWSERS_PATH`. Der Firefox-Smoke-Test nutzt Mozillas RDP auf einem lokalen zufälligen Port und ein frisches Profil, nicht das normale Browserprofil.
+Historische lokale Prüffolge für 0.2.0 (aktuelle M3.1-Ergebnisse: [STATUS.md](docs/STATUS.md)): Check (0 Fehler/Warnungen), Lint/Format, **466/466 Vitest-Tests in 14 Dateien**, **48/48 UI-Tests in Chromium/Firefox**, Produktionsbuild, Web-ext (0 Fehler/Warnungen/Hinweise), echte MV3-Installation von `dist` und finaler XPI in Firefox 157 sowie Paketbau. Darunter sechs vollständige Integrationstests mit realem Executor, IndexedDB, Autorisierung, Transport und nativem Adapter gegen **synthetisches DOM, ohne YouTube-Mutation**. Der CI-Nachweis wird nach Veröffentlichung im [Lieferstatus](docs/STATUS.md) verlinkt. DOM-/UI-Fixtures sind keine Live-M3-Abnahme. Für Chromium optional `LATERSIFT_CHROMIUM_PATH=/usr/bin/chromium`; Browserdateien optional über `PLAYWRIGHT_BROWSERS_PATH`. Der Firefox-Smoke-Test nutzt Mozillas RDP auf einem lokalen zufälligen Port und ein frisches Profil, nicht das normale Browserprofil.
 
 ### Scanstatus / Diagnose
 
@@ -104,4 +106,4 @@ DOM-Unterstützung ist begrenzt und kann durch YouTube-Änderungen ausfallen. De
 - [Temporäre Installation](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/)
 - [Signierung und Verteilung](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/)
 
-[Repository](https://github.com/almighty-atlas/latersift) · [MIT](LICENSE). Nächster Abnahmeschritt: der bewusst freigegebene **1er-Live-Pilot**, nicht eine behauptete M3-Fertigstellung. Bei nicht unterstützter Struktur stoppen, keine Prüfungen lockern oder Klicks erzwingen; technischen Fehler mit sparsamem, bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. Es wurden keine eigenen Live-Schreibaktionen ausgeführt.
+[Repository](https://github.com/almighty-atlas/latersift) · [MIT](LICENSE). Nächster Abnahmeschritt: ausschließlich die **rein lesende Sheet-Erkennung in Zen**. Keine Freigabe für echte Schreibtests in M3.1. Bei nicht unterstützter Struktur stoppen, keine Prüfungen lockern oder Klicks erzwingen; technischen Fehler mit sparsamem, bereinigtem DOM-Kontext melden, nicht mit vollständigem privatem Seiten-DOM. Es wurden keine eigenen Live-Schreibaktionen ausgeführt.

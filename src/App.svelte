@@ -358,12 +358,10 @@
     playlistChoices = [];
     playlistChoice = '';
     try {
-      playlistChoices = (await discoverPlaylists(videos[0].id)).filter(
-        (p: PlaylistChoice) => p.writable,
-      );
+      playlistChoices = await discoverPlaylists(videos[0].id);
       if (!playlistChoices.length)
         error =
-          'Keine schreibbaren Playlists gefunden. Die YouTube-Ansicht wird möglicherweise nicht unterstützt; manuelle URL bleibt möglich.';
+          'Keine Playlist-Einträge im unterstützten Save-Dialog gefunden.';
     } catch (e) {
       error = `Playlists konnten nicht aus YouTube geladen werden: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
@@ -928,9 +926,36 @@
           >
           <p class="hint">
             Öffnet ausdrücklich einen YouTube-Arbeitstab zur Abfrage. Keine
-            Playlist wird dabei verändert.
+            Playlist wird dabei verändert. Ein erkanntes neues Sheet bleibt zur
+            Kontrolle geöffnet; nach Abschluss der Abfrage kannst du zu
+            LaterSift zurückwechseln.
           </p>
           {#if playlistChoices.length}
+            <p class="hint">
+              {playlistChoices.length} Einträge gelesen. Auswahlzustand ist keine
+              bestätigte gespeicherte Mitgliedschaft. Unbestätigte Identitäten sind
+              keine Schreibziele.
+            </p>
+            <ul aria-label="Erkannte YouTube-Playlists">
+              {#each playlistChoices as choice (choice)}
+                <li>
+                  <strong>{choice.title || 'Name unbekannt'}</strong> ·
+                  {choice.checked === true
+                    ? 'ausgewählt'
+                    : choice.checked === false
+                      ? 'nicht ausgewählt'
+                      : 'Auswahl unbekannt'} ·
+                  {choice.id
+                    ? `ID über Zeilenlink belegt: ${choice.id}`
+                    : 'Identität unbestätigt'}
+                  {#if choice.diagnostic}<p class="hint">
+                      {choice.diagnostic}
+                    </p>{/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if playlistChoices.some((p) => p.id && p.id !== 'WL' && p.writable)}
             <label for="archive-choice">Schreibbare YouTube-Playlist</label>
             <select
               id="archive-choice"
@@ -946,7 +971,7 @@
               {disabled}
             >
               <option value="">Bitte wählen</option>
-              {#each playlistChoices as choice (choice.id)}<option
+              {#each playlistChoices.filter((p) => p.id && p.id !== 'WL' && p.writable) as choice (choice)}<option
                   value={choice.id}>{choice.title} ({choice.id})</option
                 >{/each}
             </select>
@@ -959,8 +984,9 @@
             placeholder="https://www.youtube.com/playlist?list=PL…"
           />
           <p class="hint">
-            Kein Zugriff auf fremde Zugangsdaten. Es werden keine Playlists
-            erstellt oder verändert.
+            Eine manuelle URL speichert nur das gewünschte Ziel. Sie bestätigt
+            keine Zuordnung zu einem Dialogeintrag und schaltet Schreiben nicht
+            frei.
           </p>
           <button class="primary" onclick={saveArchive} {disabled}
             >Ziel lokal speichern</button

@@ -102,7 +102,22 @@ describe('native Save write adapter — synthetic contracts, not live proof', ()
   it('lists only explicit PL identities and reports fresh persisted membership after reopening', async () => {
     const f = fixture();
     expect(await f.adapter.getAvailablePlaylists(VIDEO)).toEqual([
-      { id: PLAYLIST, title: 'Archive', writable: true },
+      {
+        id: PLAYLIST,
+        title: 'Archive',
+        writable: true,
+        checked: false,
+        identity: 'explicit-link',
+        variant: 'legacy',
+      },
+      {
+        id: 'WL',
+        title: 'Watch later',
+        writable: true,
+        checked: true,
+        identity: 'explicit-link',
+        variant: 'legacy',
+      },
     ]);
     expect((await f.adapter.getPlaylistMembership(VIDEO, PLAYLIST)).state).toBe(
       'absent',
@@ -218,16 +233,38 @@ describe('native Save write adapter — synthetic contracts, not live proof', ()
   it('does not map a checkbox title or manual playlist ID to an unidentified row', async () => {
     const f = fixture();
     f.markup(() => option(PLAYLIST, null));
-    await expect(f.adapter.getAvailablePlaylists(VIDEO)).rejects.toThrow(
-      /missing explicit playlist link/,
-    );
-    document.querySelector('[role="dialog"]')!.remove();
+    expect(await f.adapter.getAvailablePlaylists(VIDEO)).toEqual([
+      expect.objectContaining({
+        id: null,
+        title: PLAYLIST,
+        writable: false,
+        identity: 'unverified',
+      }),
+    ]);
     expect((await f.adapter.getPlaylistMembership(VIDEO, PLAYLIST)).state).toBe(
       'unknown',
     );
     await expect(f.adapter.addToPlaylist(VIDEO, PLAYLIST)).rejects.toThrow(
       /unidentified/,
     );
+    expect(f.clicks).not.toHaveBeenCalled();
+  });
+
+  it('returns mixed identity diagnostics without relaxing the old complete-ID archive preflight', async () => {
+    const f = fixture();
+    f.markup(() => option('Archive', PLAYLIST) + option('Other', null));
+    const choices = await f.adapter.getAvailablePlaylists(VIDEO);
+    expect(choices).toHaveLength(2);
+    expect(choices[0]).toMatchObject({
+      id: PLAYLIST,
+      identity: 'explicit-link',
+      writable: false,
+    });
+    expect(choices[1]).toMatchObject({
+      id: null,
+      identity: 'unverified',
+      writable: false,
+    });
     expect(f.clicks).not.toHaveBeenCalled();
   });
 
@@ -279,7 +316,22 @@ describe('native Save write adapter — synthetic contracts, not live proof', ()
       ).replaceAll('role="checkbox"', 'role="checkbox" aria-disabled="true"'),
     );
     expect(await f.adapter.getAvailablePlaylists(VIDEO)).toEqual([
-      { id: PLAYLIST, title: 'Archive', writable: false },
+      {
+        id: PLAYLIST,
+        title: 'Archive',
+        writable: false,
+        checked: false,
+        identity: 'explicit-link',
+        variant: 'legacy',
+      },
+      {
+        id: 'WL',
+        title: 'Watch later',
+        writable: false,
+        checked: true,
+        identity: 'explicit-link',
+        variant: 'legacy',
+      },
     ]);
     await expect(f.adapter.removeFromWatchLater(VIDEO)).rejects.toThrow(
       /disabled/,

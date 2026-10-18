@@ -14,6 +14,10 @@ type Environment = {
 // Deliberately isolated contracts, not a claim about every current YouTube UI.
 const RENDERER = 'ytd-add-to-playlist-renderer';
 const OPTION = 'ytd-playlist-add-to-option-renderer';
+const SHEET = 'yt-sheet-view-model';
+const SHEET_OPTION = 'toggleable-list-item-view-model';
+const SHEET_TITLE =
+  /^(Save to|Speichern unter|Speichern in|In Playlist speichern|Speichern)(?:\s*(?:…|\.{3}))?$/i;
 const DIALOG =
   '[role="dialog"], [role="alertdialog"], dialog[open], tp-yt-paper-dialog';
 const BUTTON = 'button, [role="button"]';
@@ -104,7 +108,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
   }
   function dialogs(): Element[] {
     const candidates = [
-      ...doc.querySelectorAll(`${DIALOG}, ${RENDERER}`),
+      ...doc.querySelectorAll(`${DIALOG}, ${RENDERER}, ${SHEET}`),
     ].filter(visible);
     return candidates.filter(
       (el) => !candidates.some((other) => other !== el && other.contains(el)),
@@ -132,11 +136,38 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     const open = dialogs();
     if (!visible(dialog) || open.length !== 1 || open[0] !== dialog)
       fail('dialog unexpectedly closed or replaced');
-    const renderers = [...dialog.querySelectorAll(RENDERER)];
-    if (dialog.matches(RENDERER)) renderers.unshift(dialog);
-    if (renderers.length !== 1 || !visible(renderers[0]))
-      fail('unsupported structure: expected one ytd-add-to-playlist-renderer');
-    return renderers[0];
+    const roots = [...dialog.querySelectorAll(`${RENDERER}, ${SHEET}`)].filter(
+      visible,
+    );
+    if (dialog.matches(`${RENDERER}, ${SHEET}`)) roots.unshift(dialog);
+    if (roots.length !== 1)
+      fail(
+        'Save-Dialog nicht eindeutig: genau ein Legacy-Renderer oder Sheet erwartet.',
+      );
+    const root = roots[0];
+    if (root.matches(SHEET)) {
+      const dropdown = root.closest('tp-yt-iron-dropdown');
+      const popup = dropdown?.closest('ytd-popup-container');
+      const layouts = [
+        ...root.querySelectorAll('yt-contextual-sheet-layout'),
+      ].filter(visible);
+      const headings = [
+        ...root.querySelectorAll('yt-panel-header-view-model h2'),
+      ].filter(visible);
+      if (
+        !dropdown ||
+        !popup ||
+        layouts.length !== 1 ||
+        headings.length !== 1 ||
+        !layouts[0].contains(headings[0]) ||
+        headings[0].closest(SHEET) !== root ||
+        !SHEET_TITLE.test(normalize(headings[0].textContent))
+      )
+        fail(
+          'Nicht unterstütztes Sheet: sichtbarer Save-to-/Speichern-Titel und Popup-Struktur fehlen oder sind mehrdeutig.',
+        );
+    }
+    return root;
   }
   function click(el: Element) {
     if (
@@ -184,7 +215,9 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
       videoId,
       () => {
         const root = current(videoId, dialog);
-        return [...root.querySelectorAll(OPTION)].some(visible)
+        return [
+          ...root.querySelectorAll(root.matches(SHEET) ? SHEET_OPTION : OPTION),
+        ].some(visible)
           ? true
           : undefined;
       },
@@ -193,10 +226,16 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     return dialog;
   }
   async function close(videoId: string, dialog: Element) {
-    current(videoId, dialog);
-    const buttons = [...dialog.querySelectorAll(BUTTON)].filter(
-      (el) => visible(el) && CLOSE.test(name(el)),
-    );
+    const root = current(videoId, dialog);
+    // A playlist itself can be named Close. Sheet menuitems are never dismiss controls.
+    const buttons = root.matches(SHEET)
+      ? []
+      : [...dialog.querySelectorAll(BUTTON)].filter(
+          (el) =>
+            visible(el) &&
+            !el.closest(`${OPTION}, ${SHEET_OPTION}`) &&
+            CLOSE.test(name(el)),
+        );
     if (buttons.length > 1) fail('ambiguous Close/Schließen buttons');
     if (buttons.length === 1) click(buttons[0]);
     else {
@@ -231,15 +270,38 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     title: string;
     checked: boolean | null;
     writable: boolean;
+    variant: 'legacy' | 'sheet';
   };
   function rows(videoId: string, dialog: Element): Row[] {
     const root = current(videoId, dialog);
     const result: Row[] = [];
-    for (const option of root.querySelectorAll(OPTION)) {
+    const sheet = root.matches(SHEET);
+    const selector = sheet ? SHEET_OPTION : OPTION;
+    for (const option of root.querySelectorAll(selector)) {
       if (!visible(option)) continue;
-      const boxes = [...option.querySelectorAll(CHECKBOX)].filter(
-        (el) => visible(el) && el.closest(OPTION) === option,
-      );
+      if (
+        option.closest(`${RENDERER}, ${SHEET}`) !== root ||
+        option.parentElement?.closest(selector)
+      )
+        fail('Verschachtelte Playlist-Einträge sind nicht unterstützt.');
+      const boxes = [
+        ...option.querySelectorAll(
+          sheet ? 'button[role="menuitem"]' : CHECKBOX,
+        ),
+      ].filter((el) => visible(el) && el.closest(selector) === option);
+      if (sheet) {
+        const items = [
+          ...option.querySelectorAll('yt-list-item-view-model'),
+        ].filter(visible);
+        if (
+          items.length !== 1 ||
+          boxes.length !== 1 ||
+          !items[0].contains(boxes[0])
+        )
+          fail(
+            'Sheet-Eintrag nicht eindeutig: genau ein Listeneintrag mit Menübutton erwartet.',
+          );
+      }
       if (boxes.length !== 1)
         fail(
           'unsupported structure: checkbox option must contain exactly one checkbox',
@@ -247,7 +309,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
       const checkbox = boxes[0];
       const ids = new Set<string>();
       for (const anchor of option.querySelectorAll('a[href]')) {
-        if (anchor.closest(OPTION) !== option || !visible(anchor)) continue;
+        if (anchor.closest(selector) !== option || !visible(anchor)) continue;
         let url: URL;
         try {
           url = new URL(
@@ -268,9 +330,30 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
       }
       if (ids.size > 1)
         fail('ambiguous explicit playlist IDs within one option');
-      const title = name(checkbox);
+      // A referenced accessible name must belong to this row, not another playlist.
+      const refs = checkbox
+        .getAttribute('aria-labelledby')
+        ?.split(/\s+/)
+        .filter(Boolean);
+      const localName =
+        !sheet ||
+        !refs ||
+        refs.every((id) => {
+          const matches = [...option.querySelectorAll('[id]')].filter(
+            (el) => el.id === id,
+          );
+          return (
+            matches.length === 1 &&
+            visible(matches[0]) &&
+            [...doc.querySelectorAll('[id]')].filter((el) => el.id === id)
+              .length === 1
+          );
+        });
+      const title = localName ? name(checkbox) : '';
       const id = [...ids][0] || null;
-      const aria = checkbox.getAttribute('aria-checked');
+      const aria = checkbox.getAttribute(
+        sheet ? 'aria-pressed' : 'aria-checked',
+      );
       const input = checkbox.matches('input[type="checkbox"]')
         ? (checkbox as HTMLInputElement)
         : null;
@@ -283,14 +366,40 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
             ? null
             : input.checked;
       }
+      if (sheet) {
+        // aria-pressed is UI feedback only. Any additional contradictory state invalidates it.
+        for (const el of [
+          option,
+          ...option.querySelectorAll(
+            '[aria-pressed], [aria-checked], input[type="checkbox"]',
+          ),
+        ]) {
+          for (const attr of ['aria-pressed', 'aria-checked']) {
+            const value = el.getAttribute(attr);
+            if (value !== null && value !== String(checked)) checked = null;
+          }
+          if (el.matches('input[type="checkbox"]')) {
+            const input = el as HTMLInputElement;
+            if (input.indeterminate || input.checked !== checked)
+              checked = null;
+          }
+        }
+      }
       result.push({
         option,
         checkbox,
         id,
         title,
         checked,
+        // New sheets are discovery-only until an independent ID/membership contract exists.
+        variant: sheet ? 'sheet' : 'legacy',
         writable:
-          enabled(option) && enabled(checkbox) && checked !== null && !!title,
+          !sheet &&
+          !!id &&
+          enabled(option) &&
+          enabled(checkbox) &&
+          checked !== null &&
+          !!title,
       });
     }
     const ids = result.map((row) => row.id).filter((id) => id !== null);
@@ -312,13 +421,17 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
   async function session<T>(
     videoId: string,
     run: (dialog: Element) => Promise<T>,
+    keepSheetOpen = false,
   ): Promise<T> {
     if (busy) fail('another adapter operation is in progress');
     busy = true;
     try {
       const dialog = await open(videoId);
       const result = await run(dialog);
-      await close(videoId, dialog);
+      const root = current(videoId, dialog);
+      // Discovery leaves the new sheet available for inspection; no guessed dismiss control
+      // or successful synthetic Escape is required to return read-only observations.
+      if (!keepSheetOpen || !root.matches(SHEET)) await close(videoId, dialog);
       return result;
     } finally {
       // On failure leave the UI untouched for manual inspection; never guess a cleanup target.
@@ -330,6 +443,10 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
     let clicked = false;
     try {
       await session(videoId, async (dialog) => {
+        if (current(videoId, dialog).matches(SHEET))
+          fail(
+            'Neuer Save-Dialog nur lesbar: Playlist-ID und gespeicherte Mitgliedschaft sind nicht unabhängig bestätigt.',
+          );
         const row = target(videoId, dialog, id);
         if (!row || !row.writable || row.checked === null)
           fail(
@@ -372,20 +489,52 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
   }
   return {
     getAvailablePlaylists: (videoId) =>
-      session(videoId, async (dialog): Promise<PlaylistChoice[]> => {
-        const options = rows(videoId, dialog);
-        if (options.some((row) => row.id === null))
-          fail(
-            'unsupported structure: missing explicit playlist link; checkbox titles are not playlist IDs',
-          );
-        return options
-          .filter((row) => row.id !== 'WL')
-          .map((row) => ({
-            id: row.id!,
+      session(
+        videoId,
+        async (dialog): Promise<PlaylistChoice[]> => {
+          const options = rows(videoId, dialog);
+          // Discovery may show unidentified entries, but must not relax the legacy
+          // archive preflight that previously rejected any incomplete ID mapping.
+          const completeIdentity = options.every((row) => row.id !== null);
+          return options.map((row) => ({
+            id: row.id,
             title: row.title,
-            writable: row.writable,
+            writable: row.writable && completeIdentity,
+            checked: row.checked,
+            identity: row.id ? 'explicit-link' : 'unverified',
+            variant: row.variant,
+            ...(!row.id
+              ? {
+                  diagnostic:
+                    'Keine belegte Playlist-ID: Namen und Auswahlzustand reichen nicht aus.',
+                }
+              : row.variant === 'sheet'
+                ? {
+                    diagnostic:
+                      'ID über Zeilenlink belegt; unabhängige Mitgliedschaftsprüfung für Sheets fehlt. Schreiben gesperrt.',
+                  }
+                : !completeIdentity
+                  ? {
+                      diagnostic:
+                        'Dialog enthält Einträge ohne belegte ID. Schreibziele bleiben gesperrt.',
+                    }
+                  : {}),
+            ...(row.checked === null
+              ? {
+                  diagnostic:
+                    'Auswahlzustand fehlt oder ist widersprüchlich. Schreiben gesperrt.',
+                }
+              : {}),
+            ...(!row.title
+              ? {
+                  diagnostic:
+                    'Playlist-Name fehlt oder ist nicht eindeutig zugeordnet. Schreiben gesperrt.',
+                }
+              : {}),
           }));
-      }),
+        },
+        true,
+      ),
     getPlaylistMembership: async (videoId, id) => {
       playlistId(id);
       return session(videoId, async (dialog): Promise<MembershipEvidence> => {
@@ -398,7 +547,7 @@ export function createWriteAdapter(env: Environment): WriteAdapter {
           ...(!known
             ? {
                 message:
-                  'Target checkbox missing, unidentified, disabled or unknown; absence is not established.',
+                  'Playlist nicht sicher zugeordnet oder Dialog nur lesbar. UI-Auswahl beweist keine gespeicherte Mitgliedschaft; Zustand bleibt unknown.',
               }
             : {}),
         };
