@@ -143,10 +143,16 @@ Checkpoints: bei geänderter Anzahl nach 100 neuen IDs oder 5 Sekunden, sonst sp
 
 Alle manuellen Resultate mit tatsächlichem Befund dokumentieren. **Kein Live-M3-Erfolg ist durch diese Anleitung vorweggenommen.**
 
-## 0.2.10 Schnellimport
+## 0.2.11 Schnellimport
 
 `tests/scanner.test.ts` verbindet den Scanner mit dem tatsächlichen Scrolladapter:
-DOM-Wachstum 100 → 200 → 300, Checkpoint vor Sprung, Stepwise-Vergleich, entfernte
+anfänglich fehlende Positionen/Zeilen/Geometrie und temporäre Ladeplatzhalter,
+stabiler Start, tatsächlich ausgeführte Endsprünge, DOM-Wachstum
+100 → 200 → 300 ohne schrittweise Anfahrt, Checkpoint vor Sprung und erneute
+Zeilenprüfung nach ACK, getrennte persistente Fallback-Gründe mit Snapshot,
+kein Ausräumen unbekannter Zeilen durch einen bloßen Teilbestand,
+Beruhigungsfenster erst nach vollständiger Positionsevidenz, Pause/Resume
+vor und nach dem ersten Sprung, Stepwise-Vergleich, entfernte
 Zeilen, Lücken/Konflikte, Stillstand mit Continuation, fehlgeschlagene Sprünge,
 verzögerte Timer, Pause/Resume und Speicherfehler. `tests/ui/fast-import.spec.ts`
 prüft zusätzlich native Scrollbenachrichtigungen und echte Containergeometrie

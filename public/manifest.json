@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LaterSift",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "Watch Later lokal sichern und durchsehen. Experimenteller YouTube-Schreibpilot nur nach ausdrücklicher Freigabe.",
   "browser_specific_settings": {
     "gecko": {

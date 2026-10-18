@@ -122,7 +122,13 @@ Die vollständige lokale Prüffolge war erfolgreich: **466/466 Vitest-Tests in 1
 
 An explicit per-invocation `fast-jump` opt-in uses the existing content-script
 scanner and committed checkpoint ACK boundary. End jumps use only the detected
-container's native scroll geometry. DOM retention and contiguous positional
+container's native scroll geometry. Before the first jump, two consecutive
+observations must identify the same contiguous prefix; hydration uses the existing
+bounded wait budget without scrolling. Known numeric contradictions remain
+failures. After each checkpoint ACK, rows and authorization context are checked
+again before jumping. Historical unknown rows can be discharged only by a fresh
+entire rendered list with exact count, unique IDs and contiguous positions; the
+normal completeness settlement still applies. DOM retention and contiguous positional
 evidence are checked before each jump. Uncertain retention, gaps, conflicts,
 geometry failures or bounded stalls switch to stepwise scanning and rebuild
 position evidence from the beginning while retaining collected videos. Snapshot

@@ -88,6 +88,12 @@ export async function scanWatchLater(
   let previousProgressAt: number | undefined;
   let jumpAt: number | undefined;
   let lastJumpAt: number | undefined;
+  let fastReady = false;
+  let initializationMs = 0;
+  let initialCandidate: Map<string, number | null> | undefined;
+  const sameRows = (a: Map<string, number | null>, b: Map<string, Video>) =>
+    a.size === b.size &&
+    [...b].every(([id, v]) => a.has(id) && a.get(id) === v.position);
   let previousRendered = 0;
   let previousHeight: number | undefined;
   const performance: ImportPerformance = {
@@ -103,6 +109,14 @@ export async function scanWatchLater(
     jumpToNewIdsSamples: 0,
     fallbackCount: 0,
     fallbackReasons: [],
+    fallbackSnapshots: [],
+    ...(options.mode === 'fast-jump'
+      ? ({
+          initializationState: 'waiting',
+          initializationElapsedMs: 0,
+          initializationObservations: 0,
+        } as const)
+      : {}),
     renderedRows: 0,
     minRenderedPosition: null,
     maxRenderedPosition: null,
@@ -199,6 +213,7 @@ export async function scanWatchLater(
   };
   env.doc.addEventListener('visibilitychange', visibilityChanged);
   let previousContinuation: boolean | undefined;
+  let previousProven = false;
   let previousExpected = sameDocument ? resume!.expectedCount : null;
   const results: string[] = [];
   const recoveryResult = (result: string) => {
@@ -305,16 +320,20 @@ export async function scanWatchLater(
       const rows = [...env.doc.querySelectorAll(ROW)];
       const rendered = new Map<string, Video>();
       const rowPositions = new Map<Element, number>();
+      const renderedPositions: (number | null)[] = [];
       let duplicateRenderedId = false;
       const confirmedBeforeRead = new Set(confirmed.keys());
-      const count = expectedCount(env.doc) ?? (emptyNotice(env.doc) ? 0 : null);
+      const expectedCountAtRead = expectedCount(env.doc);
+      const count = expectedCountAtRead ?? (emptyNotice(env.doc) ? 0 : null);
       if (previousExpected !== null && count !== previousExpected) {
         // A changed playlist invalidates position evidence, but not retained IDs.
         confirmed.clear();
+        initialCandidate = undefined;
         positionConflict = false;
       }
       previousExpected = count;
       scan.expectedCount = count;
+      if (!fastReady) initializationMs += workingElapsed;
       const beforeConfirmed = confirmed.size;
       let progress = false,
         unknown = 0;
@@ -324,18 +343,26 @@ export async function scanWatchLater(
           unknown++;
           continue;
         }
+        renderedPositions.push(video.position);
         if (video.position !== null) rowPositions.set(row, video.position);
         if (rendered.has(video.id)) duplicateRenderedId = true;
         rendered.set(video.id, video);
         const prior = confirmed.get(video.id);
-        if (prior && prior.position !== video.position) positionConflict = true;
+        // Hydration from unknown to a directly observed position is not a contradiction.
+        // Losing a known position or changing a known number still invalidates proof.
+        if (
+          prior &&
+          prior.position !== null &&
+          prior.position !== video.position
+        )
+          positionConflict = true;
         if (!confirmed.has(video.id)) progress = true;
         confirmed.set(video.id, video);
         videos.set(video.id, video);
       }
-      const renderedPositions = [...rendered.values()].map((v) => v.position);
       const validPositions = renderedPositions.filter(
-        (p): p is number => p !== null,
+        (p): p is number =>
+          p !== null && Number.isSafeInteger(p) && p >= 1 && p <= 100000,
       );
       const orderedPositions = [...new Set(validPositions)].sort(
         (a, b) => a - b,
@@ -383,28 +410,73 @@ export async function scanWatchLater(
         else if (scroll && !progress)
           performance.endWithoutNewIdsMs += observedElapsed;
       }
+      const duplicatePositions =
+        validPositions.length !== orderedPositions.length;
+      const invalidPositions = renderedPositions.length - validPositions.length;
+      const missingWithinRenderedRange = orderedPositions.length
+        ? orderedPositions.at(-1)! -
+          orderedPositions[0] +
+          1 -
+          orderedPositions.length
+        : 0;
+      let rowIssue: FastFallbackReason | undefined;
+      if (positionConflict) rowIssue = 'changed-positions';
+      else if (duplicateRenderedId) rowIssue = 'duplicate-ids';
+      else if (duplicatePositions) rowIssue = 'duplicate-positions';
+      else if (unknown) rowIssue = 'unidentifiable-rows';
+      else if (!rows.length && count !== 0) rowIssue = 'no-rows';
+      else if (invalidPositions) rowIssue = 'invalid-positions';
+      else if (orderedPositions.some((p, i) => p !== i + 1))
+        rowIssue = 'rendered-position-gaps';
+      else if (performance.missingWithinConfirmedRange)
+        rowIssue = 'confirmed-position-gaps';
       let fallback: FastFallbackReason | undefined;
       if (performance.mode === 'fast-jump') {
         if (removedRows) fallback = 'virtualization-or-removed-rows';
-        else if (
-          unknown ||
-          (!rows.length && count !== 0) ||
-          performance.positionConflicts ||
-          renderedPositions.some((p) => p === null) ||
-          orderedPositions.some((p, i) => p !== i + 1) ||
-          performance.missingWithinConfirmedRange
-        )
-          fallback = 'position-gap-or-conflict';
+        else if (positionConflict || duplicateRenderedId || duplicatePositions)
+          fallback = rowIssue;
         else if (containerChanged) fallback = 'container-changed';
+        else if (!fastReady) {
+          performance.initializationObservations!++;
+          performance.initializationElapsedMs = initializationMs;
+          // No scroll during hydration: require the same fully identified prefix in
+          // two observations. The existing wait budget is a ceiling, not a delay.
+          const geometryReady =
+            !!env.jumpToEnd && !!scroll && scroll.viewport > 0;
+          if (
+            !rowIssue &&
+            geometryReady &&
+            initialCandidate &&
+            sameRows(initialCandidate, rendered)
+          ) {
+            fastReady = true;
+            performance.initializationState = 'ready';
+          } else {
+            initialCandidate =
+              rowIssue || !geometryReady
+                ? undefined
+                : new Map([...rendered].map(([id, v]) => [id, v.position]));
+            if (initializationMs >= config.waitingMs)
+              fallback =
+                rowIssue ??
+                (!geometryReady
+                  ? 'geometry-unavailable'
+                  : 'initialization-unstable');
+          }
+        } else if (rowIssue) fallback = rowIssue;
         else if (!env.jumpToEnd || !scroll || scroll.viewport <= 0)
           fallback = 'geometry-unavailable';
-        else if (
+        if (
+          !fallback &&
+          fastReady &&
           scrollTrace.lastAction?.kind === 'end-jump' &&
           (scrollTrace.lastAction.outcome !== 'target-observed' ||
             (!progress && approaching))
         )
           fallback = 'jump-failed';
         else if (
+          !fallback &&
+          fastReady &&
           !progress &&
           !(
             count !== null &&
@@ -417,6 +489,24 @@ export async function scanWatchLater(
           fallback = 'bounded-stall';
       }
       if (fallback) {
+        performance.fallbackSnapshots!.push({
+          reason: fallback,
+          phase: fastReady ? 'scanning' : 'initializing',
+          elapsedMs: Math.max(0, observedAt - performanceStart),
+          renderedRows: rows.length,
+          uniqueRenderedIds: rendered.size,
+          unidentifiableRows: unknown,
+          validPositions: validPositions.length,
+          invalidPositions,
+          minPosition: orderedPositions[0] ?? null,
+          maxPosition: orderedPositions.at(-1) ?? null,
+          missingWithinRenderedRange,
+          missingWithinConfirmedRange: performance.missingWithinConfirmedRange,
+          duplicateIds: duplicateRenderedId,
+          duplicatePositions,
+          changedPositions: positionConflict,
+        });
+        if (!fastReady) performance.initializationState = 'fallback';
         performance.mode = 'stepwise';
         rewindRequired = true;
         performance.fallbackCount++;
@@ -460,7 +550,17 @@ export async function scanWatchLater(
               elapsedMs: Math.max(0, observedAt - performanceStart),
             });
       }
-      scan.unidentifiableRows = Math.max(scan.unidentifiableRows, unknown);
+      // A vanished placeholder alone cannot be dismissed. Only a fresh, entire
+      // rendered list with exact count/IDs/positions discharges historical unknowns.
+      const entireRenderedList =
+        count !== null &&
+        rendered.size === count &&
+        rows.length === count &&
+        !rowIssue &&
+        !removedRows;
+      scan.unidentifiableRows = entireRenderedList
+        ? 0
+        : Math.max(scan.unidentifiableRows, unknown);
       const pendingRecovery = scrollTrace.recoveryHistory!.at(-1);
       if (pendingRecovery?.result === 'pending') {
         pendingRecoveryObserved = true;
@@ -505,7 +605,11 @@ export async function scanWatchLater(
         positions.size === count &&
         [...positions].every((p) => p !== null && p >= 1 && p <= count) &&
         !positionConflict &&
+        !duplicateRenderedId &&
+        !duplicatePositions &&
         scan.unidentifiableRows === 0;
+      if (proven !== previousProven) stableSince = time;
+      previousProven = proven;
       scan.videos = [...videos.values()];
       scan.confirmedVideoIds = [...confirmed.keys()];
       const visibleCache = new WeakMap<Element, boolean>();
@@ -593,6 +697,7 @@ export async function scanWatchLater(
         !rewindRequired &&
         proven &&
         !continuation &&
+        (performance.mode !== 'fast-jump' || fastReady) &&
         time - stableSince >= config.settleMs
       ) {
         // A complete snapshot contains only evidence from this document, never stale resume IDs.
@@ -608,7 +713,8 @@ export async function scanWatchLater(
       const pausedHidden = hidden && !background;
       if (
         (pausedHidden ? hiddenQuietMs : stallMs) >= config.waitingMs &&
-        (!approaching || pausedHidden)
+        (!approaching || pausedHidden) &&
+        (pausedHidden || performance.mode !== 'fast-jump' || fastReady)
       ) {
         scan.status = pausedHidden ? 'needs_attention' : 'waiting';
         scan.message = pausedHidden
@@ -742,7 +848,7 @@ export async function scanWatchLater(
         !recoveredThisRound &&
         performance.mode === 'fast-jump'
       ) {
-        if (progress || lastJumpAt === undefined) {
+        if (fastReady && (progress || lastJumpAt === undefined)) {
           // The ACK must represent committed IDs and positions before skipping geometry.
           await persist();
           if (signal.aborted)
@@ -755,13 +861,32 @@ export async function scanWatchLater(
             (env.doc.visibilityState === 'hidden' && !background)
           )
             continue;
-          jumpAt = lastJumpAt = clock();
-          performance.endJumps++;
-          const jumpStarted = clock();
-          const action = recordAction(env.jumpToEnd?.());
-          performance.scrollApproachMs += Math.max(0, clock() - jumpStarted);
-          if (action) traceEntry.action = action;
-          priorAction = action || undefined;
+          // The DOM can hydrate or change while the ACK is pending. A checkpoint
+          // covers only the exact rows read above; inspect again before skipping.
+          const currentRows = [...env.doc.querySelectorAll(ROW)];
+          const current = currentRows.map((row) =>
+            parseRow(row, new Date(time).toISOString()),
+          );
+          const changedDuringAck =
+            currentRows.length !== rows.length ||
+            current.some(
+              (v, i) =>
+                !v ||
+                currentRows[i] !== rows[i] ||
+                !rendered.has(v.id) ||
+                rendered.get(v.id)!.position !== v.position,
+            ) ||
+            expectedCount(env.doc) !== expectedCountAtRead ||
+            !sameContainer(scroll, env.scrollInfo?.() ?? null);
+          if (!changedDuringAck) {
+            jumpAt = lastJumpAt = clock();
+            performance.endJumps++;
+            const jumpStarted = clock();
+            const action = recordAction(env.jumpToEnd?.());
+            performance.scrollApproachMs += Math.max(0, clock() - jumpStarted);
+            if (action) traceEntry.action = action;
+            priorAction = action || undefined;
+          }
         }
       } else if (!pausedHidden && !recoveredThisRound) {
         const action = recordAction(env.advance());

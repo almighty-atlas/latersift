@@ -201,6 +201,25 @@ function trace(value: unknown) {
           }),
   };
 }
+function fallbackReason(value: unknown) {
+  return choice(value, [
+    'virtualization-or-removed-rows',
+    'position-gap-or-conflict',
+    'no-rows',
+    'unidentifiable-rows',
+    'invalid-positions',
+    'duplicate-ids',
+    'duplicate-positions',
+    'changed-positions',
+    'rendered-position-gaps',
+    'confirmed-position-gaps',
+    'initialization-unstable',
+    'container-changed',
+    'geometry-unavailable',
+    'jump-failed',
+    'bounded-stall',
+  ]);
+}
 function performance(value: unknown) {
   const p = object(value);
   return {
@@ -237,16 +256,45 @@ function performance(value: unknown) {
     fallbackReasons: (Array.isArray(p.fallbackReasons)
       ? p.fallbackReasons.slice(-10)
       : []
-    ).map((reason: unknown) =>
-      choice(reason, [
-        'virtualization-or-removed-rows',
-        'position-gap-or-conflict',
-        'container-changed',
-        'geometry-unavailable',
-        'jump-failed',
-        'bounded-stall',
-      ]),
-    ),
+    ).map(fallbackReason),
+    ...(p.initializationState === undefined
+      ? {}
+      : {
+          initializationState: choice(p.initializationState, [
+            'waiting',
+            'ready',
+            'fallback',
+          ]),
+          initializationElapsedMs: number(p.initializationElapsedMs),
+          initializationObservations: number(p.initializationObservations),
+        }),
+    fallbackSnapshots: (Array.isArray(p.fallbackSnapshots)
+      ? p.fallbackSnapshots.slice(-3)
+      : []
+    ).map((value: unknown) => {
+      const s = object(value);
+      return {
+        reason: fallbackReason(s.reason),
+        phase: choice(s.phase, ['initializing', 'scanning']),
+        ...Object.fromEntries(
+          [
+            'elapsedMs',
+            'renderedRows',
+            'uniqueRenderedIds',
+            'unidentifiableRows',
+            'validPositions',
+            'invalidPositions',
+            'minPosition',
+            'maxPosition',
+            'missingWithinRenderedRange',
+            'missingWithinConfirmedRange',
+          ].map((key) => [key, number(s[key])]),
+        ),
+        duplicateIds: boolean(s.duplicateIds),
+        duplicatePositions: boolean(s.duplicatePositions),
+        changedPositions: boolean(s.changedPositions),
+      };
+    }),
     milestones: (Array.isArray(p.milestones)
       ? p.milestones.slice(0, 4)
       : []

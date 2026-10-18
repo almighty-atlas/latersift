@@ -90,11 +90,37 @@ export interface ScanScrollTrace {
 }
 export type FastFallbackReason =
   | 'virtualization-or-removed-rows'
-  | 'position-gap-or-conflict'
+  | 'position-gap-or-conflict' // Legacy diagnostics only.
+  | 'no-rows'
+  | 'unidentifiable-rows'
+  | 'invalid-positions'
+  | 'duplicate-ids'
+  | 'duplicate-positions'
+  | 'changed-positions'
+  | 'rendered-position-gaps'
+  | 'confirmed-position-gaps'
+  | 'initialization-unstable'
   | 'container-changed'
   | 'geometry-unavailable'
   | 'jump-failed'
   | 'bounded-stall';
+export interface FastFallbackSnapshot {
+  reason: FastFallbackReason;
+  phase: 'initializing' | 'scanning';
+  elapsedMs: number;
+  renderedRows: number;
+  uniqueRenderedIds: number;
+  unidentifiableRows: number;
+  validPositions: number;
+  invalidPositions: number;
+  minPosition: number | null;
+  maxPosition: number | null;
+  missingWithinRenderedRange: number;
+  missingWithinConfirmedRange: number;
+  duplicateIds: boolean;
+  duplicatePositions: boolean;
+  changedPositions: boolean;
+}
 export interface ImportPerformance {
   mode: 'stepwise' | 'fast-jump';
   endJumps: number;
@@ -108,6 +134,10 @@ export interface ImportPerformance {
   jumpToNewIdsSamples: number;
   fallbackCount: number;
   fallbackReasons: FastFallbackReason[];
+  fallbackSnapshots?: FastFallbackSnapshot[];
+  initializationState?: 'waiting' | 'ready' | 'fallback';
+  initializationElapsedMs?: number;
+  initializationObservations?: number;
   renderedRows: number;
   minRenderedPosition: number | null;
   maxRenderedPosition: number | null;

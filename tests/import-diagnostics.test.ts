@@ -826,3 +826,103 @@ describe('performance diagnostic copy boundary', () => {
     },
   );
 });
+
+describe('fast initialization fallback copy boundary', () => {
+  it('keeps bounded numeric fallback evidence and fixed reasons, rejecting all private content', () => {
+    const scan = fixture();
+    Object.assign(scan.diagnostics!, {
+      performance: {
+        initializationState: 'waiting',
+        initializationElapsedMs: 8000,
+        initializationObservations: 9,
+        fallbackReasons: [
+          'no-rows',
+          'unidentifiable-rows',
+          'invalid-positions',
+          'duplicate-ids',
+          'duplicate-positions',
+          'changed-positions',
+          'rendered-position-gaps',
+          'confirmed-position-gaps',
+          'initialization-unstable',
+          'PRIVATE_REASON',
+        ],
+        fallbackSnapshots: Array.from({ length: 20 }, () => ({
+          reason: 'invalid-positions',
+          phase: 'initializing',
+          elapsedMs: 8000,
+          renderedRows: 100,
+          uniqueRenderedIds: 100,
+          unidentifiableRows: 0,
+          validPositions: 99,
+          invalidPositions: 1,
+          minPosition: 1,
+          maxPosition: 100,
+          missingWithinRenderedRange: 1,
+          missingWithinConfirmedRange: 1,
+          duplicateIds: false,
+          duplicatePositions: false,
+          changedPositions: false,
+          title: 'PRIVATE_TITLE',
+          id: 'PRIVATE_ID',
+          url: 'PRIVATE_URL',
+          html: 'PRIVATE_DOM',
+        })),
+      },
+    });
+    const p = parse(scan).diagnostics.performance;
+    expect(formatImportDiagnostic(scan)).not.toContain('PRIVATE');
+    expect(p.initializationState).toBe('waiting');
+    expect(p.fallbackSnapshots).toHaveLength(3);
+    expect(p.fallbackSnapshots[0]).toEqual({
+      reason: 'invalid-positions',
+      phase: 'initializing',
+      elapsedMs: 8000,
+      renderedRows: 100,
+      uniqueRenderedIds: 100,
+      unidentifiableRows: 0,
+      validPositions: 99,
+      invalidPositions: 1,
+      minPosition: 1,
+      maxPosition: 100,
+      missingWithinRenderedRange: 1,
+      missingWithinConfirmedRange: 1,
+      duplicateIds: false,
+      duplicatePositions: false,
+      changedPositions: false,
+    });
+    Object.assign(scan.diagnostics!.performance!, {
+      initializationState: 'PRIVATE_STATE',
+      initializationElapsedMs: 'PRIVATE_TIME',
+      fallbackSnapshots: [
+        {
+          reason: 'PRIVATE_REASON',
+          phase: 'PRIVATE_PHASE',
+          renderedRows: 'PRIVATE_ROWS',
+          changedPositions: 'PRIVATE_CONFLICT',
+          validPositions: Infinity,
+        },
+      ],
+    });
+    expect(formatImportDiagnostic(scan)).not.toContain('PRIVATE');
+    expect(
+      parse(scan).diagnostics.performance.fallbackSnapshots[0],
+    ).toMatchObject({
+      reason: 'unknown',
+      phase: 'unknown',
+      renderedRows: null,
+      validPositions: null,
+      changedPositions: false,
+    });
+  });
+  it.each([null, {}, 'PRIVATE_DOM', [null, 'PRIVATE_HTML']])(
+    'handles malformed snapshots %s',
+    (value) => {
+      const scan = fixture();
+      Object.assign(scan.diagnostics!, {
+        performance: { fallbackSnapshots: value },
+      });
+      expect(formatImportDiagnostic(scan)).not.toContain('PRIVATE');
+    },
+  );
+});
