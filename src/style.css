@@ -80,6 +80,10 @@ select {
   color: var(--text);
   padding: 11px 12px;
 }
+input[type='checkbox'] {
+  width: auto;
+  margin-right: 8px;
+}
 label {
   display: block;
   font-size: 12px;
@@ -749,8 +753,13 @@ footer {
   .shell {
     padding: 0 18px;
   }
-  header {
-    height: 80px;
+  header,
+  .shell.has-library header {
+    height: auto;
+    min-height: 80px;
+    padding: 12px 0;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .brand {
     font-size: 19px;
@@ -767,6 +776,10 @@ footer {
   }
   nav {
     gap: 2px;
+    flex: 1 1 260px;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .queue-count {
     padding: 8px;

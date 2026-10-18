@@ -470,6 +470,20 @@ test('mobile layout fits and dialog traps focus', async ({
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  await page.locator('header nav').evaluate((nav) => {
+    (nav as HTMLElement).style.fontSize = '18px';
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  for (const button of await page.locator('header nav button').all()) {
+    const box = await button.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  }
   await page.getByRole('button', { name: 'Runde anpassen' }).click();
   await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();

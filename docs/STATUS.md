@@ -20,7 +20,9 @@ Keine neuen YouTube-Writes oder Gates, keine gelockerten Identitäts-/Schreibpr�
 - `pnpm test:ui`: **66/66 in Chromium und Firefox**. Mock-Transport mit `active: false`, Persistenz-vor-ACK, Tab-Bereinigung, Katalog über mehrere Teilaktualisierungen/Reload, bestätigte versus erhaltene IDs sowie Bibliotheks-/Backupzugriff trotz defektem Cleanup-Journal. Kein echter YouTube-Tab bei diesen Fixtures.
 - `pnpm package`: Produktionsbuild und `artifacts/latersift-0.2.3-unsigned.xpi` erfolgreich. `pnpm lint:extension`: **0 Fehler, 0 Warnungen, 0 Hinweise**.
 - `pnpm test:firefox-extension` sowie `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.3-unsigned.xpi node scripts/test-firefox.mjs`: echte temporäre MV3-Installation aus `dist` und finaler XPI in **Firefox 157.0**, keine Manifestwarnungen.
-- SHA-256 der lokal getesteten XPI: `768bc0f40620b36c9a4c71428c8e1acb53a6be07c8a4d2f4707d8d0c4fb6e429`.
+- SHA-256 der lokal getesteten XPI: `50a3a144b5c076457fd8d7c6aefb3e7e0104ae6c73b47793484609a4e8a64afb`.
+
+Die erste PR-CI deckte bei `2f7e328` Header-Überlauf mit CI-Schriftmetriken auf. Der mobile Header und seine Navigation umbrechen jetzt bei Platzmangel; die unveränderte Viewport-Grenze wird zusätzlich mit größerer Navigationsschrift getestet. Nach der Korrektur wurden sämtliche UI-Prüfungen, Typ-/Lint-/Formatchecks, Paketierung, Erweiterungslint und beide Firefox-Installationen erneut erfolgreich ausgeführt.
 
 Kein angemeldeter YouTube-/Zen-Live-Test, keine echte Messung von Hintergrund-IntersectionObserver oder Browser-Drosselung, kein `tabs.hide`-Versuch. Throttling, Tabverlust und Unterbrechungen sind synthetisch simuliert; Installationsprüfungen belegen keine Live-DOM-Kompatibilität. Keine Signierung/AMO-Veröffentlichung. Die folgenden historischen Ergebnisse gelten nicht als Nachweis für 0.2.3.
 
