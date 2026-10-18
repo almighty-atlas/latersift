@@ -4,7 +4,7 @@
 
 Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später ansehen“. TypeScript strict, Svelte 5, Firefox Manifest V3, IndexedDB, MIT. Kein Server, keine Telemetrie, keine KI.
 
-> **0.2.11: vorzeitigen Schnellimport-Fallback beheben.** Der Zen-Lauf mit 0.2.10 fiel vor dem ersten Endsprung auf `stepwise` zurück. Eine begrenzte Startphase wartet jetzt auf zwei übereinstimmende, vollständig identifizierte Anfangsbestände; erst nach Checkpoint-ACK und erneuter DOM-Prüfung wird gesprungen. Getrennte Fallback-Gründe mit bereinigtem Zeilen-/Positionssnapshot machen den Auslöser sichtbar. Dauerhafte Lücken, Konflikte und Virtualisierung bleiben sicher blockiert. Die neue Zen-Abnahme steht aus. [Root Cause und Messvertrag](docs/WATCH-LATER-FAST-IMPORT.md), [Prüfstatus](docs/STATUS.md).
+> **0.2.12: Ladezeiten im Schnellimport getrennt behandeln.** Der bestätigte 0.2.11-Lauf brach nach 8.037 ms ohne Zeilen ab; die ersten 100 kamen erst nach 12.272 ms. Jetzt gelten eigene Obergrenzen: 30 Sekunden für erste identifizierbare Zeilen, danach 8 Sekunden Stabilisierung und 30 Sekunden Nachladen nach Endsprung. Zwei passende Anfangsbeobachtungen geben sofort frei; im Nachladefenster keine Recovery-Bewegungen. Checkpoint-ACK, erneute Prüfung und strenge Vollständigkeit bleiben erforderlich. Die 30-s-Grenzen sind vorläufig; die Zen-Abnahme und ein Live-Geschwindigkeitsnachweis stehen aus. [Zeitbudgets und Abnahme](docs/WATCH-LATER-FAST-IMPORT.md), [Prüfstatus](docs/STATUS.md).
 >
 > **Historie 0.2.10: experimenteller adaptiver Schnellimport.** Im Importdialog „Schnellimport: direkt ans Listenende springen (experimentell)“ ausdrücklich auswählen; standardmäßig aus. Erst nach bestätigtem Checkpoint springt LaterSift auf dem erkannten Scrollcontainer ans gemessene Ende. DOM-Wachstum, Positionslücken, verschwundene Zeilen und Soll-/Ist-Geometrie werden geprüft. Bei Unsicherheit folgt automatisch der bisherige schrittweise Scanner mit erneuter Positionsprüfung vom Anfang. Bereinigte Diagnose enthält beobachtete Anfahrts-/Wartezeiten und Meilensteine bei 100/200/300/500 bestätigten Videos. Eine kürzere Gesamtimportzeit oder zuverlässiges Hintergrund-Nachladen wird nicht garantiert. [Vertrag und Zen-Abnahme](docs/WATCH-LATER-FAST-IMPORT.md), [Prüfstatus](docs/STATUS.md).
 >
@@ -31,7 +31,7 @@ Lokale Firefox-/Zen-Erweiterung zum Durchsehen der YouTube-Playlist „Später a
 
 Details: [Status / Evidenz](docs/STATUS.md), [Architektur](ARCHITECTURE.md), [Testanleitung und erster Live-Pilot](docs/TESTING.md).
 
-## Installation / Upgrade auf 0.2.11
+## Installation / Upgrade auf 0.2.12
 
 Desktop-Firefox oder Zen ab Gecko **142**, Node.js 22.12+ oder 24, pnpm 11:
 
@@ -44,7 +44,7 @@ pnpm package
 ```
 
 1. **Vor dem Upgrade den bestehenden JSON-Export lokal sichern.** Dieselbe Erweiterungs-ID `latersift@almighty-atlas.github.io` und dasselbe Browserprofil beibehalten. Library-Dokumente werden auf Schema 3 migriert; die IndexedDB-Struktur bleibt Version 1, bestehende Entscheidungen und vollständige Snapshots bleiben erhalten. Das ersetzt keine Sicherung gegen Entfernen/Profilverlust.
-2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.11-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Historisch wurden `dist` und die finale 0.2.2-XPI erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert; das ist kein Installations- oder Paketnachweis für 0.2.6. Aktuelle Qualitätsergebnisse ergänzt der Hauptagent in [STATUS.md](docs/STATUS.md).
+2. `about:debugging#/runtime/this-firefox` → „Temporäres Add-on laden…“ → `dist/manifest.json` oder nach erfolgreichem Paketbau `artifacts/latersift-0.2.12-unsigned.xpi` wählen. Paketname folgt der Manifestversion; Paket-/Manifestabweichungen stoppen die Paketierung. Historisch wurden `dist` und die finale 0.2.2-XPI erfolgreich in Firefox 157 als echtes MV3-Add-on temporär installiert; das ist kein Installations- oder Paketnachweis für 0.2.6. Aktuelle Qualitätsergebnisse ergänzt der Hauptagent in [STATUS.md](docs/STATUS.md).
 3. Zugriff auf `https://www.youtube.com` erlauben; bereits offene YouTube-Tabs nach dem Update neu laden. **Keine neuen Berechtigungen:** weiterhin nur `unlimitedStorage` und die bestehende YouTube-Host-Berechtigung.
 4. Erweiterungssymbol → LaterSift. Vorgeschlagenes Kürzel: `Alt+Shift+L` (in Zen manuell prüfen/anpassen).
 5. Im selben Profil bei YouTube anmelden. Der ausdrückliche Importstart öffnet standardmäßig einen eigenen WL-Arbeitstab mit `active: false`, ohne Fokuswechsel. Die sichtbare Checkbox **„Experimentelles Hintergrund-Scrollen erlauben“ ist vorausgewählt**; Start übernimmt diese Erlaubnis auch für echtes Scrollen bei `hidden`. Andere Tabs können verwendet werden; zuverlässiges Hintergrund-Nachladen ist nicht garantiert. Der Aktivieren-Button ist weiterhin manuell verfügbar; **für die 0.2.9-Abnahme nicht verwenden**. Unter „Erweitert“ bleibt die Auswahl eines vorhandenen eigenen YouTube-Tabs erhalten; dieser wird niemals automatisch geschlossen. Nicht parallel im Scan-Tab navigieren, umsortieren oder bearbeiten. Fehlende Einträge ggf. selbst mit YouTubes „Nicht verfügbare Videos anzeigen“ einblenden; der Scanner bedient dieses Menü nicht.
@@ -99,7 +99,7 @@ pnpm lint:extension
 pnpm exec playwright install --with-deps chromium firefox
 pnpm test:ui                # lokale Fixtures, keine Live-Mutationen
 pnpm test:firefox-extension # frisches Profil, Installations-Smoke-Test
-pnpm package                # artifacts/latersift-0.2.11-unsigned.xpi
+pnpm package                # artifacts/latersift-0.2.12-unsigned.xpi
 ```
 
 Historische lokale Prüffolge für 0.2.0 (aktuelle M3.1-Ergebnisse: [STATUS.md](docs/STATUS.md)): Check (0 Fehler/Warnungen), Lint/Format, **466/466 Vitest-Tests in 14 Dateien**, **48/48 UI-Tests in Chromium/Firefox**, Produktionsbuild, Web-ext (0 Fehler/Warnungen/Hinweise), echte MV3-Installation von `dist` und finaler XPI in Firefox 157 sowie Paketbau. Darunter sechs vollständige Integrationstests mit realem Executor, IndexedDB, Autorisierung, Transport und nativem Adapter gegen **synthetisches DOM, ohne YouTube-Mutation**. Der CI-Nachweis wird nach Veröffentlichung im [Lieferstatus](docs/STATUS.md) verlinkt. DOM-/UI-Fixtures sind keine Live-M3-Abnahme. Für Chromium optional `LATERSIFT_CHROMIUM_PATH=/usr/bin/chromium`; Browserdateien optional über `PLAYWRIGHT_BROWSERS_PATH`. Der Firefox-Smoke-Test nutzt Mozillas RDP auf einem lokalen zufälligen Port und ein frisches Profil, nicht das normale Browserprofil.

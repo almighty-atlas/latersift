@@ -123,9 +123,14 @@ Die vollständige lokale Prüffolge war erfolgreich: **466/466 Vitest-Tests in 1
 An explicit per-invocation `fast-jump` opt-in uses the existing content-script
 scanner and committed checkpoint ACK boundary. End jumps use only the detected
 container's native scroll geometry. Before the first jump, two consecutive
-observations must identify the same contiguous prefix; hydration uses the existing
-bounded wait budget without scrolling. Known numeric contradictions remain
-failures. After each checkpoint ACK, rows and authorization context are checked
+observations must identify the same contiguous prefix. Separate ceilings allow
+30 seconds of working time for the first identifiable rows, followed by 8 seconds
+for stabilization, without scrolling or any mandatory minimum delay. After each
+end jump, a separate 30-second loading window allows immediate progress and
+suppresses recovery scrolling; absence of progress triggers stepwise fallback.
+The 8-second waiting/status threshold and existing recovery/total budgets remain
+separate. Delayed polls inspect progress before applying a timeout. Known numeric
+contradictions remain failures. After each checkpoint ACK, rows and authorization context are checked
 again before jumping. Historical unknown rows can be discharged only by a fresh
 entire rendered list with exact count, unique IDs and contiguous positions; the
 normal completeness settlement still applies. DOM retention and contiguous positional

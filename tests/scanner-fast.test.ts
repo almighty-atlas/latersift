@@ -1,59 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { scanWatchLater } from '../src/adapter/scanner';
 import type { Scan } from '../src/model';
-import { createPlaylistScroller } from '../src/adapter/scroll';
-import { id, row, fixture, run } from './fixtures/scanner';
+import { id, row, fixture, growing, run } from './fixtures/scanner';
 
 describe('opt-in fast end jumps with the real scroll adapter', () => {
   const options = { background: 'experimental', mode: 'fast-jump' } as const;
-  function growing(total = 300, initial = 100) {
-    const f = fixture(total, initial);
-    f.visibility('hidden');
-    Object.defineProperty(f.env.doc, 'defaultView', { value: window });
-    const container = f.env.doc.createElement('section');
-    container.style.overflowY = 'auto';
-    f.env.doc.body.append(container);
-    container.append(
-      f.env.doc.querySelector('ytd-playlist-video-list-renderer')!,
-    );
-    let end = initial;
-    let failed = false;
-    let loading = true;
-    const boundaries: number[] = [];
-    Object.defineProperties(container, {
-      scrollHeight: { get: () => end * 100 },
-      clientHeight: { value: 600 },
-      scrollTo: {
-        value: vi.fn((o: ScrollToOptions) => {
-          if (!failed) container.scrollTop = o.top ?? 0;
-        }),
-      },
-    });
-    const scroller = createPlaylistScroller(f.env.doc);
-    f.env.scrollInfo = scroller.observedInfo;
-    f.env.jumpToEnd = vi.fn(scroller.observedEndJump);
-    f.env.resetScroll = vi.fn(scroller.observedReset);
-    f.env.advance = vi.fn(scroller.observedAdvance);
-    f.env.wait = async (ms) => {
-      f.tick(ms);
-      if (loading && container.scrollTop === end * 100 - 600 && end < total) {
-        boundaries.push(end);
-        end = Math.min(total, end + 100);
-        f.render(1, end, end < total);
-      }
-    };
-    return {
-      ...f,
-      container,
-      boundaries,
-      fail: () => {
-        failed = true;
-      },
-      stopLoading: () => {
-        loading = false;
-      },
-    };
-  }
   it('checkpoints before every jump and loads 100 → 200 → 300 only at the measured end', async () => {
     const f = growing();
     const saved: Scan[] = [];
@@ -224,7 +175,9 @@ describe('opt-in fast end jumps with the real scroll adapter', () => {
         fallbackSnapshots: [{ reason: reasons[kind], phase: 'initializing' }],
       });
       const snapshot = result.diagnostics!.performance!.fallbackSnapshots![0];
-      expect(snapshot.elapsedMs).toBeLessThanOrEqual(8000);
+      expect(snapshot.elapsedMs).toBeLessThanOrEqual(
+        kind === 'empty' ? 30000 : 8000,
+      );
       if (kind === 'missing')
         expect(snapshot).toMatchObject({
           renderedRows: 100,
@@ -488,7 +441,7 @@ describe('opt-in fast end jumps with the real scroll adapter', () => {
     });
     expect(
       result.diagnostics!.performance!.endWithoutNewIdsMs,
-    ).toBeGreaterThanOrEqual(8000);
+    ).toBeGreaterThanOrEqual(30000);
   });
   it('falls back after an end jump fails and stays incomplete', async () => {
     const f = growing(30, 10);

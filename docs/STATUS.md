@@ -1,6 +1,24 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.11 – vorzeitigen Schnellimport-Fallback beheben
+## Aktuell: 0.2.12 – Ladezeiten im Schnellimport trennen
+
+- **Nutzerbestätigter 0.2.11-Befund:** 500/4.927 in 232 s, Schnellimport aktiviert, `endJumps: 0`, `initializationState: fallback`, `fallbackReasons: ["no-rows"]`. Abbruch nach 8.037 ms bei null Zeilen; erste 100 nach 12.272 ms. Danach lückenloses Wachstum bis 500, keine bestätigten Positionskonflikte oder Containerwechsel; `scrollApproachMs: 181896`, Timer teilweise verzögert. Die zu frühe Initialisierungsgrenze ist damit bestätigt.
+- **Implementiert:** eigene Defaultbudgets von 30 s für erste identifizierbare Zeilen, anschließend maximal 8 s Stabilisierung und 30 s Nachladen je Endsprung. Zwei passende Beobachtungen geben sofort frei. Fortschritt wird vor Timeout geprüft; kein Nachholen verzögerter Timer. Während des Nachladefensters keine Recovery-Bewegungen. `waitingMs` steuert weiterhin Status/Stepwise-Verhalten, nicht mehr die Schnellmodus-Abbrüche.
+- **Sicherheit:** Checkpoint und persistierter ACK vor Sprung, erneute DOM-/Kontextprüfung, unmittelbarer Fallback bei echten Konflikten/Virtualisierung, begrenzter Fallback bei fehlendem Nachladen, sichere Neuverifikation ab Anfang. Bestehende Recovery-/Gesamtbudgets, Vollständigkeit, Snapshots, Entscheidungen, Rechte und Schreibgates bleiben erhalten. Keine YouTube-Schreibaktionen.
+- **Zen-Abnahme offen:** 30 s liegen mit Reserve über der beobachteten Startladezeit; die Eignung der Nachladegrenze ist mangels Live-Endsprung noch nicht belegt. Ziel: `ready`, erreichte Sprungziele, neue IDs nach Sprüngen, mindestens 500 Videos ohne manuellen Scroll, kein unbegründeter Fallback und deutlich weniger Anfahrtszeit. [Zeitbudgets und genau ein sicherer Abnahmelauf](WATCH-LATER-FAST-IMPORT.md).
+
+### Qualitätsergebnisse 0.2.12
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `git diff --check`: erfolgreich. pnpm 11.25.0; lokal Node 26.11.1, CI nutzt Node 24.
+- `pnpm exec vitest run tests/scanner-fast-loading.test.ts tests/scanner-fast.test.ts`: **50/50**. `pnpm test`: **1.080/1.080 in 25 Dateien**, einschließlich aller bisherigen Playlist-/Schreibsicherheitsfälle. 12 zusätzliche Ladebudget-Regressionen mit echten Scanner-/Scrolladapter-Aufrufen und synthetischem DOM/Zeitverlauf.
+- `pnpm test:ui`: **108/108 in Chromium und Firefox**, einschließlich realer nativer Scrollgeometrie und Virtualisierungsfallback gegen Fixtures.
+- `pnpm package` (einschließlich `pnpm build`), `pnpm lint:extension`: erfolgreich, **0 Fehler/Warnungen/Hinweise**. `pnpm test:firefox-extension` sowie `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.12-unsigned.xpi node scripts/test-firefox.mjs`: `dist` und finale XPI in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
+- `pnpm format:check` beanstandet ausschließlich die vor Arbeitsbeginn unversionierte `AGENTS.md`; diese bleibt unverändert und uncommitted. Alle versionierten Dateien bestehen `git ls-files -z | xargs -0 node_modules/.bin/prettier --check --ignore-unknown`; neue Testdatei separat formatiert. CI prüft den sauberen Checkout regulär.
+- Umgebungsgrenzen: pnpm-Storezugriff nach Versionsänderung und lokale Sockets für Vorschau/Firefox-Smoke benötigten Sandbox-Freigabe; danach erfolgreich. Keine Abhängigkeitsänderung. Der erste Zwischenlauf beanstandete erwartungsgemäß die alte 8-s-Assertion für einen leeren Start; nach Anpassung an 30 s sind die obigen Läufe grün.
+- XPI: `artifacts/latersift-0.2.12-unsigned.xpi`; SHA-256: `9acd55033f62d5ec7e44a9fa735feb20eebab6e35833bed5daa6d7e0d0d97630`.
+- Keine verbundenen Browser/Apps laut Computer-Use-Inventar; keine angemeldete Zen-Abnahme oder Live-Geschwindigkeitsmessung. Keine Signierung, Veröffentlichung oder reale Playlist-Mutation. PR #2 bleibt offen; GitHub-CI wird nach Push separat verifiziert.
+
+## Historischer Stand: 0.2.11 – vorzeitigen Schnellimport-Fallback beheben
 
 - **Nutzerbestätigter 0.2.10-Befund:** 500/4.927 nach rund 188 s, `stepwise`, `endJumps: 0`, ein `position-gap-or-conflict`-Fallback, 160.195 ms Anfahrt und 27.504 ms Endwartezeit ohne neue IDs. Zuletzt wachsendes DOM, 500 eindeutige Zeilen/Positionen 1–500, keine verbleibenden Lücken/Konflikte oder Containerwechsel; Timer teilweise verzögert. Der Fallback erfolgte vor dem ersten Sprung. Welcher alte Sammelauslöser zuerst zutraf, ist ohne damaligen Snapshot nicht rückwirkend belegbar.
 - **Reproduzierte Codeursache:** sofortiger permanenter Fallback bereits bei der ersten unvollständigen DOM-Beobachtung. Fehlende Positionsnummern/Zeilen und Ladeplatzhalter wurden wie endgültige Widersprüche behandelt. Zusätzlich blieben `null → Nummer` als Positionskonflikt und historische unidentifizierbare Zeilen als Höchstwert gespeichert.

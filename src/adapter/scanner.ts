@@ -47,6 +47,10 @@ export const wait = (ms: number, signal: AbortSignal) =>
 export const SCAN_DEFAULTS = {
   intervalMs: 1000,
   waitingMs: 8000,
+  // Separate YouTube's first render from prefix hydration and post-jump loading.
+  initialRowsMs: 30000,
+  initialStabilizationMs: 8000,
+  endJumpLoadMs: 30000,
   recoveryEveryMs: 20000,
   maxRecoveries: 3,
   stallMs: 90000,
@@ -90,6 +94,7 @@ export async function scanWatchLater(
   let lastJumpAt: number | undefined;
   let fastReady = false;
   let initializationMs = 0;
+  let stabilizationStartedMs: number | undefined;
   let initialCandidate: Map<string, number | null> | undefined;
   const sameRows = (a: Map<string, number | null>, b: Map<string, Video>) =>
     a.size === b.size &&
@@ -439,8 +444,11 @@ export async function scanWatchLater(
         else if (!fastReady) {
           performance.initializationObservations!++;
           performance.initializationElapsedMs = initializationMs;
+          if (rendered.size && stabilizationStartedMs === undefined)
+            stabilizationStartedMs = initializationMs;
           // No scroll during hydration: require the same fully identified prefix in
-          // two observations. The existing wait budget is a ceiling, not a delay.
+          // two observations. Each phase budget is a ceiling, not a delay; progress
+          // is inspected before timing out even when the browser delayed a poll.
           const geometryReady =
             !!env.jumpToEnd && !!scroll && scroll.viewport > 0;
           if (
@@ -456,7 +464,12 @@ export async function scanWatchLater(
               rowIssue || !geometryReady
                 ? undefined
                 : new Map([...rendered].map(([id, v]) => [id, v.position]));
-            if (initializationMs >= config.waitingMs)
+            if (
+              stabilizationStartedMs === undefined
+                ? initializationMs >= config.initialRowsMs
+                : initializationMs - stabilizationStartedMs >=
+                  config.initialStabilizationMs
+            )
               fallback =
                 rowIssue ??
                 (!geometryReady
@@ -484,7 +497,7 @@ export async function scanWatchLater(
             !hasContinuation(env.doc)
           ) &&
           lastJumpAt !== undefined &&
-          observedAt - lastJumpAt >= config.waitingMs
+          observedAt - lastJumpAt >= config.endJumpLoadMs
         )
           fallback = 'bounded-stall';
       }
@@ -719,7 +732,9 @@ export async function scanWatchLater(
         scan.status = pausedHidden ? 'needs_attention' : 'waiting';
         scan.message = pausedHidden
           ? 'YouTube lädt momentan nicht weiter. Aktiviere den YouTube-Tab, um das Nachladen fortzusetzen.'
-          : 'YouTube lädt momentan keine weiteren Videos. Begrenzte Scroll-Wiederherstellung läuft; ggf. nicht verfügbare Videos in YouTube anzeigen.';
+          : performance.mode === 'fast-jump'
+            ? 'YouTube lädt momentan keine weiteren Videos. Begrenztes Nachladefenster nach dem Endsprung läuft …'
+            : 'YouTube lädt momentan keine weiteren Videos. Begrenzte Scroll-Wiederherstellung läuft; ggf. nicht verfügbare Videos in YouTube anzeigen.';
         scan.diagnostics.reason = pausedHidden
           ? 'background_tab_stalled'
           : hidden
@@ -727,6 +742,7 @@ export async function scanWatchLater(
             : 'waiting_for_youtube';
         if (
           !pausedHidden &&
+          performance.mode !== 'fast-jump' &&
           recoveries < config.maxRecoveries &&
           stallMs - lastRecovery >= config.recoveryEveryMs
         ) {

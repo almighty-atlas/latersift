@@ -1,39 +1,53 @@
-# Watch Later: sicherer Schnellimport-Start 0.2.11
+# Watch Later: getrennte Schnellimport-Ladebudgets 0.2.12
 
 ## Bestätigter Befund und Root Cause
 
-Der Nutzerlauf in Zen mit 0.2.10 bestätigt 500/4.927 Videos nach rund 188 Sekunden,
-`mode: stepwise`, `endJumps: 0`, einen Fallback `position-gap-or-conflict`,
-160.195 ms Anfahrt und 27.504 ms am Ende ohne neue IDs. Zuletzt: wachsendes DOM,
-500 eindeutige Zeilen mit Positionen 1–500, keine verbleibenden Lücken/Konflikte,
-keine Containerwechsel; teilweise verzögerte Timer. **Der Schnellmodus wurde
-vor dem ersten Endsprung deaktiviert.** Ein fehlgeschlagener Endsprung ist damit
-nicht die Ursache dieses Laufs. Der späte gültige Bestand widerlegt keine frühe
-unvollständige DOM-Beobachtung.
+Der Nutzerlauf in Zen mit 0.2.11 bestätigt 500/4.927 Videos in 232 Sekunden bei
+aktiviertem Schnellimport. `initializationState: fallback`, `endJumps: 0` und
+`fallbackReasons: ["no-rows"]` zeigen einen Initialisierungsabbruch nach
+8.037 ms ohne Videozeilen. Die ersten 100 Videos wurden erst nach 12.272 ms
+bestätigt. Danach wuchs das DOM lückenlos bis 500; keine bestätigten
+Positionskonflikte oder Containerwechsel. `scrollApproachMs: 181896`,
+Hintergrundtimer teilweise deutlich verzögert.
 
-**Im Code reproduziert:** 0.2.10 prüft die erste DOM-Beobachtung sofort gegen den
-endgültigen Schnellmodusvertrag. Keine Zeilen, eine unidentifizierbare Ladezeile,
-eine noch fehlende Positionsnummer oder eine anfängliche Lücke lösen denselben
-irreversiblen Sammelfallback aus. Zusätzlich wurde `null → beobachtete Nummer`
-als bleibender Positionskonflikt gespeichert. `unidentifiableRows = max(...)`
-blockierte nach verschwundenen Platzhaltern dauerhaft die Vollständigkeit.
+Damit ist für diesen Lauf belegt: Die achtsekündige Initialisierungsgrenze
+deaktivierte den Schnellmodus vor den ersten Videozeilen. Im Code begrenzte
+`waitingMs` zugleich diese Startphase und `bounded-stall` nach Endsprung.
+Der Lauf enthält keinen Endsprung und kann deshalb keine geeignete
+Sprung-bis-Nachladen-Grenze live belegen. Die neuen 30 Sekunden sind vorläufig;
+sie müssen anhand der nächsten bereinigten Zen-Diagnose bewertet werden.
 
-**Grenze der Live-Ursachenanalyse:** Der alte Bericht speichert keinen Snapshot
-des Fallback-Zeitpunkts. Welcher einzelne Auslöser zuerst auftrat, lässt sich
-rückwirkend nicht belegen. DOM-Hydration ist durch neue Fixtures als Fehlerpfad
-nachgewiesen, nicht als bereits isolierte Ursache im angemeldeten Zen-Profil.
-Timerverzögerungen sind beobachtet; ihr Anteil ist nicht kausal gemessen.
+## Getrennte Zeitbudgets in 0.2.12
 
-## Initialisierung in 0.2.11
+| Phase                              | Default                                                           | Start und Ende                                                                                                                             |
+| ---------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Erste identifizierbare Zeilen      | `initialRowsMs: 30000`                                            | Ab Scanner-Aufruf, bis mindestens eine tatsächlich geparste Videozeile vorliegt; unbekannte Ladezeilen starten keine Stabilisierung.       |
+| Anfangsbestand stabilisieren       | `initialStabilizationMs: 8000`                                    | Ab erster identifizierbarer Zeile, ohne Neustart bei weiterem Wachstum; zwei aufeinanderfolgende passende Beobachtungen geben sofort frei. |
+| Nach erfolgreichem Endsprung laden | `endJumpLoadMs: 30000`                                            | Ab tatsächlichem Sprung, ohne weitere Scrollversuche; neue IDs geben sofort den nächsten geprüften Sprung frei.                            |
+| Status/Stepwise-Recovery           | `waitingMs: 8000`, Recovery alle 20 s, maximal 3, Stillstand 90 s | Bestehende Stepwise-Regeln; während des Schnellmodus-Nachladefensters keine Recovery-Bewegungen.                                           |
+| Gesamtbudget                       | `min(7200000, 300000 + bestätigte IDs × 1000)` ms, 100000 Runden  | Unveränderte Sicherheitsgrenzen; kein Zurücksetzen durch einzelne Startphasen.                                                             |
+
+Die 30-s-Startgrenze liegt mit Reserve über den beobachteten 12.272 ms. Das
+separate 8-s-Fenster für Hydration/Stabilisierung beginnt erst mit einer
+identifizierbaren Zeile. Dadurch kann ein spät ankommender Bestand noch
+stabilisiert werden, ohne endlos auf wechselnde Daten zu warten. Bei regulären
+Polls umfasst der Start damit höchstens 30 + 8 Sekunden Arbeitszeit. Ein permanentes leeres
+oder unidentifizierbares DOM fällt nach 30 Sekunden sicher zurück.
 
 Vor dem ersten Sprung wird nicht gescrollt. Zwei aufeinanderfolgende Beobachtungen
 müssen denselben vollständig identifizierten Anfangsbestand mit eindeutigen IDs,
 gültigen Positionen 1…N ohne Lücken und verfügbarer Geometrie zeigen. Ein leeres
-DOM ohne explizite Leerlisten-Evidenz erfüllt diese Bedingung nicht. Die bestehende
-`waitingMs`-Grenze (8 Sekunden Arbeitszeit, je Aufruf) begrenzt die Initialisierung;
-sie ist **keine zusätzliche feste Wartezeit**. Ein stabiler Bestand kann schon
-beim zweiten regulären Poll starten. Hintergrundtimer werden nicht nachgeholt;
-ein später zweiter Poll darf einen weiterhin stabilen Bestand bestätigen.
+DOM ohne explizite Leerlisten-Evidenz erfüllt diese Bedingung nicht. Die Budgets
+sind Obergrenzen, keine Mindestwartezeiten: erste gültige Zeilen bei Sekunde 4
+können beim nächsten regulären Poll bei Sekunde 5 den ersten Sprung freigeben.
+
+Zeitmessung nutzt die vorhandene monotone Uhr und beobachtete Arbeitsintervalle,
+bei ausdrücklich freigegebenem Hintergrundscan einschließlich verborgener Zeit.
+Timer werden nicht nachgeholt. Jede Beobachtung prüft zuerst den tatsächlichen
+Fortschritt: Ein verzögerter Poll mit gültigem stabilem Bestand oder neuen IDs
+löst keinen reinen Zeit-Fallback aus. Ohne Fortschritt greift die Grenze beim
+ersten tatsächlich ausgeführten Poll nach Ablauf. Browser-Suspendierung kann
+die reale Rückmeldezeit verlängern, erzeugt aber keine Scrollschleife.
 
 Fehlende Zeilen, Positionsnummern, Geometrie oder Ladeplatzhalter werden während
 dieser Phase erneut beobachtet. Numerische Widersprüche, doppelte IDs/Positionen,
@@ -75,9 +89,11 @@ Nachweis des Mechanismus: Auch ein Umbau oder eine Änderung der Liste kann die
 Ursache sein. Reines Zeilen-/Höhenwachstum ersetzt keine ID-/Positionsevidenz.
 Fehlende/unbekannte/mehrfache Positionen, doppelte IDs, Positionskonflikte,
 Containerwechsel, fehlende Geometrie, ein fehlgeschlagener Sprung oder ein
-begrenzter Stillstand (bestehendes Wartefenster: 8 Sekunden beobachtete Zeit)
-führen einmalig zum schrittweisen Modus. Keine automatische Rückkehr in den
-Schnellmodus während desselben Laufs.
+begrenzter Stillstand (eigenes Nachladefenster: 30 Sekunden beobachtete Zeit)
+führen einmalig zum schrittweisen Modus. `bounded-stall` greift ausschließlich
+nach dem eigenen Nachladefenster, nicht nach der 8-s-Statusschwelle. Recovery
+startet erst im Stepwise-Fallback; dessen Stillstandszähler wird zurückgesetzt.
+Keine automatische Rückkehr in den Schnellmodus während desselben Laufs.
 
 Beim Fallback bleiben gesammelte Videos erhalten, aber die Positionsbestätigung
 wird vollständig zurückgesetzt und gespeichert. Der Scrollcontainer wird zum
@@ -150,16 +166,18 @@ Dokument-UUIDs, DOM-Inhalte oder Rohfehler, auch bei manipuliertem Speicher.
 ## Zen-Abnahme
 
 Im bisherigen angemeldeten Profil den lokalen Backup-Export sichern und auf
-0.2.11 aktualisieren. Den Import mit ausdrücklich aktiviertem Schnellimport und
+0.2.12 aktualisieren. Den Import mit ausdrücklich aktiviertem Schnellimport und
 Hintergrundscrollen starten. Den YouTube-Arbeitstab weder aktivieren noch manuell
 scrollen; keine Menüs oder Schreibaktionen bedienen. Die bestätigten Zähler
-und Zeiten bei 100/200/300 und über 500 hinaus beobachten, danach kontrolliert
+und Zeiten bei 100/200/300 und mindestens 500 Videos beobachten, danach kontrolliert
 pausieren und das bereinigte Import-Diagnose-JSON kopieren.
 
-Erfolgskriterium: Bei stabilem Anfangsbestand mindestens ein nachweislich
-versuchter nativer Endsprung (`endJumps > 0`, Soll-/Ist-Geometrie in der History)
-und selbstständiger Hintergrundfortschritt über 300–500 Videos ohne manuelles
-Scrollen. `initializationState`, Fallback-Snapshot, Meilensteine, Anfahrtszeit,
+Erfolgskriterien: `initializationState: ready`, `endJumps > 0`, beobachtete
+Endsprünge erreichen ihre Sollposition und neue IDs erscheinen nach den Sprüngen.
+Kein unbegründeter Fallback; erheblich weniger Anfahrtszeit als die 181.896 ms
+aus 0.2.11. Mindestens 500 Videos ohne manuelles Scrollen reichen für diese
+Abnahme; alle 4.927 sind nicht erforderlich. `initializationState`,
+Fallback-Snapshot, Meilensteine, Anfahrtszeit,
 Endwartezeit und Sprung-bis-ID-Intervalle zusammen auswerten. Ein Sprungversuch
 allein beweist weder Bewegung noch Nachladen; diese Evidenzen bleiben getrennt.
 
@@ -168,4 +186,7 @@ DOM-Daten, bleibt der sichere schrittweise Scanner maßgeblich. Keine garantiert
 Gesamtimportdauer und keine aggressive Wiederholung. Fixtures in Chromium und
 Firefox beweisen Geometrie, Ablauf und konservative Fehlerbehandlung, jedoch
 keine aktuelle YouTube-Kompatibilität im angemeldeten Zen-Profil. Die Abnahme
-von 0.2.11 und neue Live-Zeiten stehen aus.
+von 0.2.12 und neue Live-Zeiten stehen aus. Insbesondere die Eignung des
+30-s-Nachladefensters ist noch nicht live bestätigt; `jumpToNewIdsMs`,
+`jumpToNewIdsSamples`, Meilensteine, Timerdaten und etwaige Fallback-Snapshots
+zusammen bewerten.

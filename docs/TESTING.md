@@ -143,7 +143,7 @@ Checkpoints: bei geänderter Anzahl nach 100 neuen IDs oder 5 Sekunden, sonst sp
 
 Alle manuellen Resultate mit tatsächlichem Befund dokumentieren. **Kein Live-M3-Erfolg ist durch diese Anleitung vorweggenommen.**
 
-## 0.2.11 Schnellimport
+## 0.2.12 Schnellimport
 
 `tests/scanner-fast.test.ts` verbindet den Scanner mit dem tatsächlichen Scrolladapter:
 anfänglich fehlende Positionen/Zeilen/Geometrie und temporäre Ladeplatzhalter,
@@ -161,3 +161,16 @@ Bridge-/Content-Tests sichern den ausdrücklichen Transport der Freigabe;
 Formatter-/UI-Tests prüfen ausgeschalteten Standard, Persistenz und bereinigte
 Diagnosekopie. Diese synthetischen Tests ersetzen nicht die
 [angemeldete Zen-Abnahme](WATCH-LATER-FAST-IMPORT.md#zen-abnahme).
+
+`tests/scanner-fast-loading.test.ts` ergänzt die getrennten Defaultbudgets:
+keine Zeilen bis Sekunde 12, 100 stabile Zeilen und Sprung nach zweiter Beobachtung;
+schneller Start nach 4 Sekunden ohne zusätzliche Mindestwartezeit;
+späte Zeilen bei Sekunde 29 und separates Hydrationsbudget bis nach Sekunde 30;
+direktes Wachstum 100 → 200 → 300; neue IDs erst 15, 20 oder 29 Sekunden nach
+Endsprung ohne Recovery; dauerhaft leere/unidentifizierbare Struktur;
+fehlendes Nachladen mit normalem sowie verzögertem 17-s-Timer, begrenzter
+Fallback und kein falsches `complete`; Pause vor ersten Zeilen und frischer
+Resume. Bestehende Tests sichern weiterhin echte Konflikte/Virtualisierung,
+Pause nach Sprung, Checkpoint-ACK, erneute DOM-Prüfung und Speicherfehler.
+Die zusätzliche Wartezeit ist eine Obergrenze, kein Test-/Produktions-Mindestdelay.
+Die geeignete reale Nachladegrenze ist erst im nächsten Zen-Lauf bestimmbar.

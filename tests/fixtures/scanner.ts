@@ -4,6 +4,7 @@ import {
   type ScanEnvironment,
 } from '../../src/adapter/scanner';
 import type { Scan } from '../../src/model';
+import { createPlaylistScroller } from '../../src/adapter/scroll';
 
 export const epoch = Date.UTC(2026, 0, 1);
 export const id = (position: number) => String(position).padStart(11, '0');
@@ -60,3 +61,52 @@ export const run = (
   env: ScanEnvironment,
   checkpoint: (scan: Scan) => Promise<void> = async () => {},
 ) => scanWatchLater(env, new AbortController().signal, checkpoint);
+
+export function growing(total = 300, initial = 100) {
+  const f = fixture(total, initial);
+  f.visibility('hidden');
+  Object.defineProperty(f.env.doc, 'defaultView', { value: window });
+  const container = f.env.doc.createElement('section');
+  container.style.overflowY = 'auto';
+  f.env.doc.body.append(container);
+  container.append(
+    f.env.doc.querySelector('ytd-playlist-video-list-renderer')!,
+  );
+  let end = initial;
+  let failed = false;
+  let loading = true;
+  const boundaries: number[] = [];
+  Object.defineProperties(container, {
+    scrollHeight: { get: () => end * 100 },
+    clientHeight: { value: 600 },
+    scrollTo: {
+      value: vi.fn((o: ScrollToOptions) => {
+        if (!failed) container.scrollTop = o.top ?? 0;
+      }),
+    },
+  });
+  const scroller = createPlaylistScroller(f.env.doc);
+  f.env.scrollInfo = scroller.observedInfo;
+  f.env.jumpToEnd = vi.fn(scroller.observedEndJump);
+  f.env.resetScroll = vi.fn(scroller.observedReset);
+  f.env.advance = vi.fn(scroller.observedAdvance);
+  f.env.wait = async (ms) => {
+    f.tick(ms);
+    if (loading && container.scrollTop === end * 100 - 600 && end < total) {
+      boundaries.push(end);
+      end = Math.min(total, end + 100);
+      f.render(1, end, end < total);
+    }
+  };
+  return {
+    ...f,
+    container,
+    boundaries,
+    fail: () => {
+      failed = true;
+    },
+    stopLoading: () => {
+      loading = false;
+    },
+  };
+}
