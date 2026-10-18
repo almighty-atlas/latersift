@@ -63,7 +63,7 @@ beforeEach(async () => {
         id: nextId++,
         url: options.url,
         active: options.active,
-        status: 'loading',
+        status: 'complete',
       };
       tabs.set(tab.id, tab);
       return tab;
@@ -125,9 +125,150 @@ describe('work tabs', () => {
     },
   );
 
+  describe.each(['playlists', 'watch-later'] as const)(
+    'create snapshot for %s',
+    (source) => {
+      it.each([
+        'markerless',
+        'different-marker',
+        'foreign-loading',
+        'foreign-complete',
+        'pending-markerless',
+        'pending-foreign',
+        'blank-pending',
+        'missing-pending',
+      ])(
+        'permanently forfeits cleanup after %s, even when the first lookup is restored',
+        async (deviation) => {
+          browser.tabs.create.mockImplementation(
+            async (options: Tabs.CreateCreatePropertiesType) => {
+              const restored = {
+                id: nextId++,
+                url: options.url!,
+                status: 'complete',
+              };
+              tabs.set(restored.id, restored);
+              const snapshot: Partial<Tabs.Tab> = { ...restored };
+              if (deviation === 'markerless')
+                snapshot.url = restored.url.split('#')[0];
+              if (deviation === 'different-marker')
+                snapshot.url = restored.url.split('#')[0] + '#private-marker';
+              if (deviation.startsWith('foreign-')) {
+                snapshot.url =
+                  'https://example.com/private-person' +
+                  new URL(restored.url).hash;
+                snapshot.status =
+                  deviation === 'foreign-loading' ? 'loading' : 'complete';
+              }
+              if (deviation.includes('pending')) {
+                snapshot.pendingUrl =
+                  deviation === 'pending-foreign'
+                    ? 'https://example.com/private-person'
+                    : restored.url.split('#')[0];
+              }
+              if (deviation === 'blank-pending') snapshot.url = 'about:blank';
+              if (deviation === 'missing-pending') delete snapshot.url;
+              return snapshot;
+            },
+          );
+          const work = await api.createWorkTab(source);
+          expect(journal()).toEqual([]);
+          expect(browser.tabs.get).not.toHaveBeenCalled();
+          await expect(api.createWorkTab(source)).rejects.toThrow(
+            'already active',
+          );
+          const reports = vi.fn();
+          await api.waitForWorkTab(work.tabId, reports);
+          const reason = deviation.startsWith('foreign-')
+            ? 'unverified_intermediate_destination'
+            : deviation.includes('pending')
+              ? 'pending_navigation'
+              : 'marker_lost';
+          expect(reports.mock.calls[0]?.[0]).toMatchObject({
+            source,
+            reason,
+            phase: 'initial',
+          });
+          expect(JSON.stringify(reports.mock.calls)).not.toMatch(
+            /private-person|private-marker|latersift-work|https:/,
+          );
+          await work.close();
+          expect(browser.tabs.remove).not.toHaveBeenCalled();
+          expect(tabs.has(work.tabId)).toBe(true);
+          expect(held.size).toBe(0);
+
+          const orphan = await api.createWorkTab(source);
+          expect(journal()).toEqual([]);
+          const fresh = await restart();
+          await fresh.cleanupOrphanWorkTabs();
+          expect(browser.tabs.remove).not.toHaveBeenCalled();
+          expect(tabs.has(orphan.tabId)).toBe(true);
+        },
+      );
+
+      it.each(['about:blank', undefined])(
+        'allows cleanup after a normal initial %s snapshot',
+        async (url) => {
+          browser.tabs.create.mockImplementationOnce(
+            async (options: Tabs.CreateCreatePropertiesType) => {
+              const restored = {
+                id: nextId++,
+                url: options.url,
+                status: 'complete',
+              };
+              tabs.set(restored.id, restored);
+              return {
+                ...restored,
+                url,
+                status: 'loading',
+                pendingUrl: options.url,
+              };
+            },
+          );
+          const work = await api.createWorkTab(source);
+          expect(journal()).toHaveLength(1);
+          await api.waitForWorkTab(work.tabId);
+          await work.close();
+          expect(browser.tabs.remove).toHaveBeenCalledExactlyOnceWith(
+            work.tabId,
+          );
+          expect(held.size).toBe(0);
+        },
+      );
+    },
+  );
+
+  it('never closes a create-snapshot-disowned tab when journal persistence fails', async () => {
+    browser.tabs.create.mockImplementationOnce(
+      async (options: Tabs.CreateCreatePropertiesType) => {
+        const restored = { id: nextId++, url: options.url, status: 'complete' };
+        tabs.set(restored.id, restored);
+        return {
+          ...restored,
+          url: 'https://example.com/private-person',
+          status: 'loading',
+        };
+      },
+    );
+    const set = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+      throw new Error('storage full');
+    });
+    try {
+      await expect(api.createWorkTab('playlists')).rejects.toThrow(
+        'storage full',
+      );
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+      expect(journal()).toEqual([]);
+      expect(held.size).toBe(0);
+    } finally {
+      set.mockRestore();
+    }
+  });
+
   it('polls until complete without releasing the source lock', async () => {
     vi.useFakeTimers();
     const work = await api.createWorkTab('playlists');
+    tabs.get(work.tabId)!.status = 'loading';
     const waiting = api.waitForWorkTab(work.tabId);
     await vi.advanceTimersByTimeAsync(500);
     expect(browser.tabs.get.mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -170,7 +311,7 @@ describe('work tabs', () => {
     'https://www.youtube.com/feed/playlists?other=1',
     'https://www.youtube.com/playlist?list=WL',
     'https://example.com/feed/playlists',
-    'https://www.youtube.com/feed/playlists',
+    'https://www.youtube.com/feed/library',
   ])('preserves navigated tabs: %s', async (url) => {
     const work = await api.createWorkTab('playlists');
     const original = tabs.get(work.tabId)!.url!;
@@ -224,6 +365,7 @@ describe('work tabs', () => {
     async (hung) => {
       vi.useFakeTimers();
       const work = await api.createWorkTab('playlists');
+      tabs.get(work.tabId)!.status = 'loading';
       if (hung)
         browser.tabs.get.mockImplementationOnce(() => new Promise(() => {}));
       const waiting = expect(api.waitForWorkTab(work.tabId)).rejects.toThrow(
@@ -354,6 +496,531 @@ describe('work tabs', () => {
     } finally {
       set.mockRestore();
     }
+  });
+
+  it.each([
+    ['about:blank', 'complete'],
+    ['about:blank', 'loading'],
+    [undefined, 'complete'],
+    [undefined, 'loading'],
+    ['https://example.com/private/person', 'loading'],
+    ['https://www.youtube.com/feed/library', 'loading'],
+  ] as const)(
+    'waits for delayed initial adoption: %s, %s',
+    async (url, status) => {
+      vi.useFakeTimers();
+      const work = await api.createWorkTab('playlists');
+      const tab = tabs.get(work.tabId)!;
+      const original = tab.url;
+      Object.assign(tab, { url, status });
+      const reports = vi.fn();
+      const waiting = api.waitForWorkTab(work.tabId, reports);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reports).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: 'initial', reason: 'waiting' }),
+      );
+      const unverifiedIntermediate = !!url && url !== 'about:blank';
+      expect(journal()).toHaveLength(unverifiedIntermediate ? 0 : 1);
+      if (unverifiedIntermediate) {
+        expect(reports).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: 'unverified_intermediate_destination',
+            phase: 'initial',
+          }),
+        );
+        expect(reports).not.toHaveBeenCalledWith(
+          expect.objectContaining({ reason: 'marker_lost' }),
+        );
+      }
+      await expect(api.createWorkTab('playlists')).rejects.toThrow(
+        'already active',
+      );
+      Object.assign(tab, { url: original, status: 'loading' });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(reports).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: 'target-loading' }),
+      );
+      tab.status = 'complete';
+      await vi.advanceTimersByTimeAsync(250);
+      await waiting;
+      expect(reports).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: 'target-ready', reason: 'ready' }),
+      );
+      expect(journal()).toHaveLength(unverifiedIntermediate ? 0 : 1);
+      await work.close();
+      if (unverifiedIntermediate) {
+        expect(browser.tabs.remove).not.toHaveBeenCalled();
+        expect(tabs.has(work.tabId)).toBe(true);
+      } else {
+        expect(browser.tabs.remove).toHaveBeenCalledExactlyOnceWith(work.tabId);
+      }
+      expect(held.size).toBe(0);
+    },
+  );
+
+  it.each(['playlists', 'watch-later'] as const)(
+    'reads %s without a matching marker, but permanently forfeits cleanup',
+    async (source) => {
+      const work = await api.createWorkTab(source);
+      const tab = tabs.get(work.tabId)!;
+      const original = tab.url!;
+      tab.url = original.split('#')[0];
+      const reports = vi.fn();
+      await api.waitForWorkTab(work.tabId, reports);
+      expect(reports).toHaveBeenCalledWith(
+        expect.objectContaining({ marker: 'absent', reason: 'marker_lost' }),
+      );
+      expect(journal()).toEqual([]);
+      await expect(api.createWorkTab(source)).rejects.toThrow('already active');
+      await api.cleanupOrphanWorkTabs();
+      tab.url = original;
+      await api.waitForWorkTab(work.tabId);
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+      expect(tabs.has(work.tabId)).toBe(true);
+      const next = await api.createWorkTab(source);
+      await next.close();
+    },
+  );
+
+  it.each(['playlists', 'watch-later'] as const)(
+    'reads markerless %s with an identical markerless pending URL',
+    async (source) => {
+      const work = await api.createWorkTab(source);
+      const tab = tabs.get(work.tabId)!;
+      const original = tab.url!;
+      tab.url = original.split('#')[0];
+      tab.pendingUrl = tab.url;
+      await api.waitForWorkTab(work.tabId);
+      expect(journal()).toEqual([]);
+      await expect(api.createWorkTab(source)).rejects.toThrow('already active');
+      Object.assign(tab, { url: original, pendingUrl: original });
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['playlists', 'https://www.youtube.com/feed/playlists?other=1'],
+    ['watch-later', 'https://www.youtube.com/playlist?list=WL&list=WL'],
+    ['watch-later', 'https://www.youtube.com/playlist?list=WL&other=1'],
+  ] as const)(
+    'still blocks a pending query mismatch for %s',
+    async (source, pendingUrl) => {
+      const work = await api.createWorkTab(source);
+      tabs.get(work.tabId)!.pendingUrl = pendingUrl;
+      await expect(api.waitForWorkTab(work.tabId)).rejects.toThrow('navigated');
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+    },
+  );
+
+  it('allows a readable pending target for read but not strict close ownership', async () => {
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    tab.pendingUrl = tab.url!.split('#')[0];
+    const reports = vi.fn();
+    await api.waitForWorkTab(work.tabId, reports);
+    expect(journal()).toEqual([]);
+    expect(reports).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'pending_navigation',
+        marker: 'matching',
+      }),
+    );
+    await expect(api.createWorkTab('playlists')).rejects.toThrow(
+      'already active',
+    );
+    delete tab.pendingUrl;
+    await api.waitForWorkTab(work.tabId);
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['playlists', false],
+    ['playlists', true],
+    ['watch-later', false],
+    ['watch-later', true],
+  ] as const)(
+    'permanently forfeits cleanup on a readable pending mismatch while loading: %s, initial blank %s',
+    async (source, initialBlank) => {
+      vi.useFakeTimers();
+      const work = await api.createWorkTab(source);
+      const tab = tabs.get(work.tabId)!;
+      const original = tab.url!;
+      Object.assign(tab, {
+        url: initialBlank ? 'about:blank' : original,
+        status: 'loading',
+        pendingUrl: original.split('#')[0] + '#different-marker',
+      });
+      const reports = vi.fn();
+      const waiting = api.waitForWorkTab(work.tabId, reports);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(journal()).toEqual([]);
+      expect(reports).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'pending_navigation' }),
+      );
+      await expect(api.createWorkTab(source)).rejects.toThrow('already active');
+      await api.cleanupOrphanWorkTabs();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+      Object.assign(tab, {
+        url: original,
+        status: 'complete',
+        pendingUrl: undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      await waiting;
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+      expect(tabs.has(work.tabId)).toBe(true);
+      expect(held.size).toBe(0);
+    },
+  );
+
+  it.each([
+    ['https://consent.youtube.com/m', 'consent', '/m', 'consent_required'],
+    [
+      'https://accounts.google.com/ServiceLogin',
+      'sign-in',
+      '[other]',
+      'sign_in_required',
+    ],
+  ] as const)(
+    'diagnoses visible final %s without adopting its matching marker',
+    async (destination, origin, actualPath, reason) => {
+      vi.useFakeTimers();
+      const work = await api.createWorkTab('playlists');
+      const tab = tabs.get(work.tabId)!;
+      const original = tab.url!;
+      const reports = vi.fn();
+      Object.assign(tab, { url: undefined, status: 'complete' });
+      const result = api
+        .waitForWorkTab(work.tabId, reports)
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reports).toHaveBeenCalledTimes(3);
+      expect(reports).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          phase: 'initial',
+          reason: 'waiting',
+          origin: 'unknown',
+        }),
+      );
+      tab.url = `${destination}?continue=private-person${new URL(original).hash}`;
+      await vi.advanceTimersByTimeAsync(250);
+      const error = await result;
+      expect(error).toBeInstanceOf(api.WorkTabError);
+      if (!(error instanceof api.WorkTabError))
+        throw new Error('Expected WorkTabError');
+      expect(error.diagnostic).toMatchObject({
+        origin,
+        actualPath,
+        reason,
+        marker: 'matching',
+        phase: 'foreign-navigation',
+      });
+      expect(JSON.stringify(reports.mock.calls)).not.toMatch(
+        /private-person|https:|latersift-work/,
+      );
+      expect(journal()).toEqual([]);
+      tab.url = original;
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+      const next = await api.createWorkTab('playlists');
+      await next.close();
+    },
+  );
+
+  it.each([
+    'https://consent.youtube.com/m',
+    'https://accounts.google.com/ServiceLogin',
+  ])('does not infer origin from pending URL alone: %s', async (pendingUrl) => {
+    const work = await api.createWorkTab('playlists');
+    Object.assign(tabs.get(work.tabId)!, {
+      url: undefined,
+      pendingUrl,
+      status: 'complete',
+    });
+    const reports = vi.fn();
+    await expect(
+      api.waitForWorkTab(work.tabId, reports),
+    ).rejects.toBeInstanceOf(api.WorkTabError);
+    expect(reports).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        origin: 'unknown',
+        actualPath: 'unknown',
+        reason: 'pending_navigation',
+      }),
+    );
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'http://consent.youtube.com/m',
+    'https://consent.youtube.com.evil.example/m',
+    'http://accounts.google.com/ServiceLogin',
+    'https://accounts.google.com.evil.example/ServiceLogin',
+  ])('does not classify lookalike auth origins: %s', async (url) => {
+    const work = await api.createWorkTab('playlists');
+    tabs.get(work.tabId)!.url = url;
+    const reports = vi.fn();
+    await expect(
+      api.waitForWorkTab(work.tabId, reports),
+    ).rejects.toBeInstanceOf(api.WorkTabError);
+    expect(reports).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        origin: 'other',
+        reason: 'foreign_destination',
+      }),
+    );
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('reads a foreign marker without treating it as ownership', async () => {
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    const original = tab.url!;
+    tab.url = original.split('#')[0] + '#latersift-work=not-ours';
+    const reports = vi.fn();
+    await api.waitForWorkTab(work.tabId, reports);
+    expect(reports).toHaveBeenCalledWith(
+      expect.objectContaining({ marker: 'different', reason: 'marker_lost' }),
+    );
+    expect(journal()).toEqual([]);
+    tab.url = original;
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('accepts the adapter trailing slash only for reading', async () => {
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    tab.url = tab.url!.replace('/playlists#', '/playlists/#');
+    await api.waitForWorkTab(work.tabId);
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it.each(['about:blank', undefined])(
+    'does not treat %s after target observation as initial loading',
+    async (url) => {
+      vi.useFakeTimers();
+      const work = await api.createWorkTab('playlists');
+      const tab = tabs.get(work.tabId)!;
+      const original = tab.url;
+      tab.status = 'loading';
+      const waiting = expect(api.waitForWorkTab(work.tabId)).rejects.toThrow(
+        'navigated',
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      tab.url = url;
+      await vi.advanceTimersByTimeAsync(250);
+      await waiting;
+      expect(journal()).toEqual([]);
+      Object.assign(tab, { url: original, status: 'complete' });
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+      expect(held.size).toBe(0);
+    },
+  );
+
+  it.each([
+    ['playlists', 'https://www.youtube.com/feed/library'],
+    ['playlists', 'https://www.youtube.com/feed/playlists?list=private'],
+    ['playlists', 'https://other.example/feed/playlists'],
+    ['watch-later', 'https://www.youtube.com/playlist?list=WL&list=WL'],
+    ['watch-later', 'https://www.youtube.com/playlist?list=WL&other=1'],
+    ['watch-later', 'https://www.youtube.com/playlist/?list=WL'],
+    ['watch-later', 'https://www.youtube.com/playlist?list=private'],
+  ] as const)(
+    'rejects complete foreign target for %s: %s',
+    async (source, url) => {
+      const work = await api.createWorkTab(source);
+      tabs.get(work.tabId)!.url = url;
+      const reports = vi.fn();
+      await expect(
+        api.waitForWorkTab(work.tabId, reports),
+      ).rejects.toBeInstanceOf(api.WorkTabError);
+      expect(reports).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: 'foreign-navigation' }),
+      );
+      if (url.includes('/feed/library'))
+        expect(reports).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            reason: 'unexpected_youtube_destination',
+            actualPath: '/feed/library',
+          }),
+        );
+      await work.close();
+      expect(browser.tabs.remove).not.toHaveBeenCalled();
+    },
+  );
+
+  it('waits on an initial nonmatching loading URL, but rejects it when complete', async () => {
+    vi.useFakeTimers();
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    Object.assign(tab, {
+      url: 'https://www.youtube.com/feed/library',
+      status: 'loading',
+    });
+    const waiting = expect(api.waitForWorkTab(work.tabId)).rejects.toThrow(
+      'navigated',
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    expect(journal()).toEqual([]);
+    await expect(api.createWorkTab('playlists')).rejects.toThrow(
+      'already active',
+    );
+    tab.status = 'complete';
+    await vi.advanceTimersByTimeAsync(250);
+    await waiting;
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('does not require pendingUrl for readiness or ownership', async () => {
+    const work = await api.createWorkTab('playlists');
+    delete tabs.get(work.tabId)!.pendingUrl;
+    await api.waitForWorkTab(work.tabId);
+    await work.close();
+    expect(browser.tabs.remove).toHaveBeenCalledExactlyOnceWith(work.tabId);
+  });
+
+  it('blocks cleanup on a different pending URL without a prior wait', async () => {
+    const work = await api.createWorkTab('playlists');
+    tabs.get(work.tabId)!.pendingUrl = 'https://example.com/private';
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+    expect(journal()).toEqual([]);
+  });
+
+  it('remembers target-ready across waits and rejects subsequent blank loading', async () => {
+    const work = await api.createWorkTab('playlists');
+    await api.waitForWorkTab(work.tabId);
+    Object.assign(tabs.get(work.tabId)!, {
+      url: 'about:blank',
+      status: 'loading',
+    });
+    await expect(api.waitForWorkTab(work.tabId)).rejects.toThrow('navigated');
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('cannot reacquire stripped-marker ownership after restart', async () => {
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    const original = tab.url!;
+    tab.url = original.split('#')[0];
+    await api.waitForWorkTab(work.tabId);
+    tab.url = original;
+    const fresh = await restart();
+    await fresh.cleanupOrphanWorkTabs();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+    expect(journal()).toEqual([]);
+  });
+
+  it('never uses pendingUrl as positive evidence for cleanup', async () => {
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    tab.pendingUrl = tab.url;
+    tab.url = 'about:blank';
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('blocks pending navigation even after marker ownership was lost', async () => {
+    const work = await api.createWorkTab('playlists');
+    const tab = tabs.get(work.tabId)!;
+    const original = tab.url!;
+    tab.url = original.split('#')[0];
+    await api.waitForWorkTab(work.tabId);
+    tab.pendingUrl = 'https://www.youtube.com/feed/playlists?other=1';
+    await expect(api.waitForWorkTab(work.tabId)).rejects.toThrow('navigated');
+    Object.assign(tab, { url: original, pendingUrl: undefined });
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+    expect(held.size).toBe(0);
+  });
+
+  it('preserves loading tabs both on close and orphan cleanup', async () => {
+    const work = await api.createWorkTab('playlists');
+    tabs.get(work.tabId)!.status = 'loading';
+    await work.close();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+    const orphan = await api.createWorkTab('watch-later');
+    tabs.get(orphan.tabId)!.status = 'loading';
+    const fresh = await restart();
+    await fresh.cleanupOrphanWorkTabs();
+    expect(browser.tabs.remove).not.toHaveBeenCalled();
+    expect(journal()).toEqual([]);
+  });
+
+  it.each([
+    'about:blank',
+    undefined,
+    'https://www.youtube.com/private/person-123?secret=token#uuid',
+  ])(
+    'bounds initial waits and sanitizes timeout diagnostics: %s',
+    async (url) => {
+      vi.useFakeTimers();
+      const work = await api.createWorkTab('playlists');
+      Object.assign(tabs.get(work.tabId)!, {
+        url,
+        status: url?.includes('private') ? 'loading' : 'complete',
+      });
+      const reports = vi.fn();
+      const result = api
+        .waitForWorkTab(work.tabId, reports)
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const error = await result;
+      expect(error).toBeInstanceOf(api.WorkTabError);
+      if (!(error instanceof api.WorkTabError))
+        throw new Error('Expected WorkTabError');
+      expect(error.diagnostic).toMatchObject({
+        reason: 'timeout',
+        phase: 'initial',
+        actualPath: url ? '[other]' : 'unknown',
+      });
+      const serialized = JSON.stringify({
+        error: error.message,
+        diagnostic: error.diagnostic,
+        reports: reports.mock.calls,
+      });
+      for (const secret of [
+        'person-123',
+        'secret',
+        'token',
+        'uuid',
+        'https://',
+        String(work.tabId),
+      ])
+        expect(serialized).not.toContain(secret);
+      await work.close();
+    },
+  );
+
+  it('does not expose lookup exceptions in loss diagnostics', async () => {
+    const work = await api.createWorkTab('playlists');
+    browser.tabs.get.mockRejectedValueOnce(
+      new Error('private-person https://secret.example/#uuid'),
+    );
+    const reports = vi.fn();
+    const error = await api
+      .waitForWorkTab(work.tabId, reports)
+      .catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(api.WorkTabError);
+    expect(JSON.stringify(reports.mock.calls)).not.toMatch(
+      /private-person|secret|uuid/,
+    );
+    expect(reports).toHaveBeenLastCalledWith(
+      expect.objectContaining({ reason: 'tab_lost', origin: 'unknown' }),
+    );
+    await work.close();
   });
 
   it('does not poll or close arbitrary existing tabs', async () => {

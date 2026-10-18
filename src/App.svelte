@@ -36,10 +36,12 @@
   import { availabilityLabels, decisionLabels } from './i18n';
   import OperationsPanel from './OperationsPanel.svelte';
   import PlaylistPanel from './PlaylistPanel.svelte';
+  import WorkTabDiagnostics from './WorkTabDiagnostics.svelte';
   import {
     createWorkTab,
     waitForWorkTab,
     cleanupOrphanWorkTabs,
+    type WorkTabDiagnostic,
   } from './work-tabs';
   import { discoverPlaylists } from './write-bridge';
   import type { PlaylistChoice } from './operations';
@@ -83,6 +85,11 @@
   let experimentalBackground = $state(true);
   let useExistingTab = $state(false);
   let importWork: Awaited<ReturnType<typeof createWorkTab>> | null = null;
+  let importTabReports = $state<WorkTabDiagnostic[]>([]);
+  function recordImportTab(report: WorkTabDiagnostic) {
+    if (JSON.stringify(importTabReports.at(-1)) !== JSON.stringify(report))
+      importTabReports = [...importTabReports.slice(-11), report];
+  }
   let disposed = false;
   let now = $state(Date.now());
   const activeScan = (s: Scan) =>
@@ -335,6 +342,7 @@
   async function importVideos(resume?: Scan) {
     if (disabled || (useExistingTab && !selectedTab)) return;
     importing = true;
+    importTabReports = [];
     pausing = false;
     feedback = '';
     error = '';
@@ -344,7 +352,7 @@
       else {
         importWork = await createWorkTab('watch-later');
         connectedTab = importWork.tabId;
-        await waitForWorkTab(importWork.tabId);
+        await waitForWorkTab(importWork.tabId, recordImportTab);
         if (disposed) {
           await importWork.close();
           importWork = null;
@@ -899,6 +907,7 @@
               : connectedTab === null && !selectedTab}
             >YouTube-Tab aktivieren ↗</button
           >
+          <WorkTabDiagnostics reports={importTabReports} />
           {#if importing && !scan}<p>
               Import wird vorbereitet … Noch kein Checkpoint gesichert.
             </p>{/if}

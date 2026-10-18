@@ -591,114 +591,160 @@ async function fakeDiscovery(page: Page, fail = false, denyCopy = false) {
 async function fakePlaylistFeed(
   page: Page,
   batches: { id: string; name: string }[][] | null = null,
+  navigation:
+    'delayed' | 'marker-stripped' | 'redirect' | 'consent' | null = null,
 ) {
-  await page.addInitScript((batches) => {
-    let refreshIndex = 0;
-    const key = 'latersift-playlist-catalog-v1';
-    const catalog = {
-      entries: [
-        {
-          id: 'PLfixtureFeed123456',
-          name: 'Fixture feed archive',
-          url: 'https://www.youtube.com/playlist?list=PLfixtureFeed123456',
-          visibility: 'private',
-          ownership: 'unknown',
+  await page.addInitScript(
+    ({ batches, navigation }) => {
+      let refreshIndex = 0;
+      const tabReads: string[] = [];
+      Object.assign(globalThis, {
+        playlistTabReads: tabReads,
+        playlistTabReady: false,
+      });
+      const key = 'latersift-playlist-catalog-v1';
+      const catalog = {
+        entries: [
+          {
+            id: 'PLfixtureFeed123456',
+            name: 'Fixture feed archive',
+            url: 'https://www.youtube.com/playlist?list=PLfixtureFeed123456',
+            visibility: 'private',
+            ownership: 'unknown',
+          },
+          {
+            id: 'WL',
+            name: 'Fixture Watch Later',
+            url: 'https://www.youtube.com/playlist?list=WL',
+            visibility: 'unknown',
+            ownership: 'unknown',
+          },
+        ],
+        status: 'partial',
+        updatedAt: '2026-10-18T00:00:00Z',
+        message: 'Fixture feed: Vollständigkeit bleibt offen.',
+        diagnostics: {
+          reason: 'feed_exhausted',
+          rounds: 2,
+          scrollAttempts: 1,
+          observedScrolls: 1,
+          scroll: null,
+          continuation: false,
+          continuationSeen: false,
+          unsupportedCards: 0,
+          expectedCount: null,
+          completenessVerified: false,
         },
-        {
-          id: 'WL',
-          name: 'Fixture Watch Later',
-          url: 'https://www.youtube.com/playlist?list=WL',
-          visibility: 'unknown',
-          ownership: 'unknown',
-        },
-      ],
-      status: 'partial',
-      updatedAt: '2026-10-18T00:00:00Z',
-      message: 'Fixture feed: Vollständigkeit bleibt offen.',
-      diagnostics: {
-        reason: 'feed_exhausted',
-        rounds: 2,
-        scrollAttempts: 1,
-        observedScrolls: 1,
-        scroll: null,
-        continuation: false,
-        continuationSeen: false,
-        unsupportedCards: 0,
-        expectedCount: null,
-        completenessVerified: false,
-      },
-    };
-    const transport = {
-      created: [] as { url: string; active: boolean }[],
-      connections: [] as { tabId: number; name: string }[],
-      requests: [] as unknown[],
-      acknowledgedAfterSave: false,
-      disconnected: false,
-      removed: [] as number[],
-    };
-    let url = '';
-    const api = {
-      runtime: { id: 'synthetic-feed@latersift' },
-      tabs: {
-        create: async (options: { url: string; active: boolean }) => {
-          transport.created.push(options);
-          url = options.url;
-          return { id: 321 };
-        },
-        get: async () => ({ id: 321, url, active: false, status: 'complete' }),
-        remove: async (tabId: number) => {
-          transport.removed.push(tabId);
-        },
-        connect: (tabId: number, options: { name: string }) => {
-          transport.connections.push({ tabId, name: options.name });
-          const checkpoint = {
-            ...catalog,
-            entries: batches
-              ? (batches[refreshIndex++] ?? []).map((entry) => ({
-                  ...entry,
-                  url: `https://www.youtube.com/playlist?list=${entry.id}`,
-                  visibility: 'unknown',
-                  ownership: 'unknown',
-                }))
-              : catalog.entries,
-          };
-          let reply: (message: unknown) => void;
-          return {
-            onMessage: {
-              addListener: (listener: typeof reply) => {
-                reply = listener;
-              },
-            },
-            onDisconnect: { addListener: () => {} },
-            disconnect: () => {
-              transport.disconnected = true;
-            },
-            postMessage: (request: { type?: string; ack?: number }) => {
-              transport.requests.push(request);
-              if (request.type === 'playlists') {
-                queueMicrotask(() =>
-                  reply({ type: 'checkpoint', id: 1, scan: checkpoint }),
-                );
-              } else if (request.ack === 1) {
-                transport.acknowledgedAfterSave =
-                  localStorage.getItem(key) === JSON.stringify(checkpoint);
-                queueMicrotask(() => reply({ type: 'done' }));
-              } else {
-                throw new Error(
-                  'Fixture forbids writes and unexpected read requests',
-                );
+      };
+      const transport = {
+        created: [] as { url: string; active: boolean }[],
+        connections: [] as { tabId: number; name: string }[],
+        requests: [] as unknown[],
+        acknowledgedAfterSave: false,
+        disconnected: false,
+        removed: [] as number[],
+      };
+      let url = '';
+      const api = {
+        runtime: { id: 'synthetic-feed@latersift' },
+        tabs: {
+          create: async (options: { url: string; active: boolean }) => {
+            transport.created.push(options);
+            url = options.url;
+            return { id: 321 };
+          },
+          get: async () => {
+            if (navigation === 'delayed') {
+              const index = tabReads.length;
+              if (index < 2) {
+                tabReads.push('about:blank');
+                return {
+                  id: 321,
+                  url: 'about:blank',
+                  active: false,
+                  status: 'loading',
+                };
               }
-            },
-          };
+              if (index < 4) {
+                tabReads.push('missing-url');
+                return { id: 321, active: false, status: 'loading' };
+              }
+              if (!Reflect.get(globalThis, 'playlistTabReady')) {
+                tabReads.push('target-loading');
+                return { id: 321, url, active: false, status: 'loading' };
+              }
+            }
+            const actualUrl =
+              navigation === 'marker-stripped'
+                ? url.split('#')[0]
+                : navigation === 'redirect'
+                  ? 'https://www.youtube.com/feed/library?private_query=QUERY_SECRET#private_hash=HASH_SECRET'
+                  : navigation === 'consent'
+                    ? 'https://consent.youtube.com/m?continue=QUERY_SECRET#private_hash=HASH_SECRET'
+                    : url;
+            tabReads.push('complete');
+            return {
+              id: 321,
+              url: actualUrl,
+              active: false,
+              status: 'complete',
+            };
+          },
+          remove: async (tabId: number) => {
+            transport.removed.push(tabId);
+          },
+          connect: (tabId: number, options: { name: string }) => {
+            transport.connections.push({ tabId, name: options.name });
+            const checkpoint = {
+              ...catalog,
+              entries: batches
+                ? (batches[refreshIndex++] ?? []).map((entry) => ({
+                    ...entry,
+                    url: `https://www.youtube.com/playlist?list=${entry.id}`,
+                    visibility: 'unknown',
+                    ownership: 'unknown',
+                  }))
+                : catalog.entries,
+            };
+            let reply: (message: unknown) => void;
+            return {
+              onMessage: {
+                addListener: (listener: typeof reply) => {
+                  reply = listener;
+                },
+              },
+              onDisconnect: { addListener: () => {} },
+              disconnect: () => {
+                transport.disconnected = true;
+              },
+              postMessage: (request: { type?: string; ack?: number }) => {
+                transport.requests.push(request);
+                if (request.type === 'playlists') {
+                  queueMicrotask(() =>
+                    reply({ type: 'checkpoint', id: 1, scan: checkpoint }),
+                  );
+                } else if (request.ack === 1) {
+                  transport.acknowledgedAfterSave =
+                    localStorage.getItem(key) === JSON.stringify(checkpoint);
+                  queueMicrotask(() => reply({ type: 'done' }));
+                } else {
+                  throw new Error(
+                    'Fixture forbids writes and unexpected read requests',
+                  );
+                }
+              },
+            };
+          },
         },
-      },
-    };
-    Object.assign(globalThis, {
-      chrome: api,
-      browser: api,
-      playlistTransport: transport,
-    });
-  }, batches);
+      };
+      Object.assign(globalThis, {
+        chrome: api,
+        browser: api,
+        playlistTransport: transport,
+      });
+    },
+    { batches, navigation },
+  );
 }
 
 test('playlist feed uses an inactive read-only work tab and persists checkpoints before acknowledging', async ({
@@ -787,6 +833,285 @@ test('playlist feed uses an inactive read-only work tab and persists checkpoints
     ),
   ).toEqual([]);
 });
+
+async function openPlaylistFeed(page: Page) {
+  await page.reload();
+  await page.getByRole('button', { name: 'Runde starten' }).click();
+  await page.getByRole('button', { name: 'Runde anpassen' }).click();
+  await page.getByRole('button', { name: 'Archivziel hinterlegen' }).click();
+  const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+  await panel
+    .getByRole('button', { name: 'Playlists aktualisieren', exact: true })
+    .click();
+  return panel;
+}
+
+async function readWorkTabDiagnostics(page: Page) {
+  await page
+    .getByText('Arbeitstab-Diagnose (ohne URL-Parameter)', { exact: true })
+    .click();
+  const textarea = page.getByRole('textbox', {
+    name: 'Bereinigte Arbeitstab-Diagnose',
+  });
+  await expect(textarea).toBeVisible();
+  await expect(textarea).toHaveAttribute('readonly', '');
+  const text = await textarea.inputValue();
+  const reports = JSON.parse(text) as Record<string, string>[];
+  expect(Array.isArray(reports)).toBe(true);
+  expect(reports.length).toBeGreaterThan(0);
+  expect(reports.length).toBeLessThanOrEqual(12);
+  const allowed: Record<string, string[]> = {
+    source: ['playlists', 'watch-later', 'unknown'],
+    tabStatus: ['loading', 'complete', 'unknown'],
+    phase: ['initial', 'target-loading', 'target-ready', 'foreign-navigation'],
+    targetPath: ['/feed/playlists', '/playlist', 'unknown'],
+    actualPath: [
+      '/feed/playlists',
+      '/feed/library',
+      '/playlist',
+      '/watch',
+      '/m',
+      '[other]',
+      'unknown',
+    ],
+    origin: ['youtube', 'consent', 'sign-in', 'other', 'unknown', 'about'],
+    marker: ['absent', 'matching', 'different'],
+    reason: [
+      'waiting',
+      'ready',
+      'marker_lost',
+      'unexpected_youtube_destination',
+      'foreign_destination',
+      'consent_required',
+      'sign_in_required',
+      'pending_navigation',
+      'timeout',
+      'tab_lost',
+      'inactive',
+      'ownership_persistence_failed',
+    ],
+  };
+  for (const [index, report] of reports.entries()) {
+    for (const key of [
+      'tabStatus',
+      'phase',
+      'targetPath',
+      'actualPath',
+      'origin',
+      'marker',
+      'reason',
+    ]) {
+      expect(report).toHaveProperty(key);
+    }
+    for (const [key, value] of Object.entries(report)) {
+      expect(allowed).toHaveProperty(key);
+      expect(allowed[key]).toContain(value);
+    }
+    if (index > 0) expect(report).not.toEqual(reports[index - 1]);
+  }
+  for (const secret of [
+    'QUERY_SECRET',
+    'HASH_SECRET',
+    'private_query',
+    'private_hash',
+    'continue=',
+    'https://',
+    'latersift-work=',
+  ]) {
+    expect(text).not.toContain(secret);
+  }
+  return reports;
+}
+
+test('playlist feed waits through initial blank, missing URL and loading target before scanning and acknowledging', async ({
+  page,
+}) => {
+  await seed(page);
+  await fakePlaylistFeed(page, null, 'delayed');
+  const panel = await openPlaylistFeed(page);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (Reflect.get(globalThis, 'playlistTabReads') as string[]).filter(
+            (step) => step === 'target-loading',
+          ).length,
+      ),
+    )
+    .toBeGreaterThanOrEqual(2);
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+  ).toMatchObject({
+    connections: [],
+    requests: [],
+    removed: [],
+    acknowledgedAfterSave: false,
+  });
+  await page.evaluate(() => Reflect.set(globalThis, 'playlistTabReady', true));
+  await expect(
+    panel.getByRole('button', { name: 'Playlists aktualisieren', exact: true }),
+  ).toBeEnabled();
+  const reads = (await page.evaluate(() =>
+    Reflect.get(globalThis, 'playlistTabReads'),
+  )) as string[];
+  expect(reads.slice(0, 4)).toEqual([
+    'about:blank',
+    'about:blank',
+    'missing-url',
+    'missing-url',
+  ]);
+  expect(reads.slice(4, -2).every((step) => step === 'target-loading')).toBe(
+    true,
+  );
+  expect(reads.slice(-2)).toEqual(['complete', 'complete']);
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+  ).toMatchObject({
+    connections: [{ tabId: 321, name: 'latersift-readonly-v1' }],
+    requests: [{ type: 'playlists' }, { ack: 1 }],
+    acknowledgedAfterSave: true,
+    disconnected: true,
+    removed: [321],
+  });
+  await expect(
+    panel
+      .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+      .getByRole('listitem'),
+  ).toHaveCount(2);
+  expect(await readWorkTabDiagnostics(page)).toEqual([
+    expect.objectContaining({
+      phase: 'initial',
+      origin: 'about',
+      tabStatus: 'loading',
+      reason: 'waiting',
+    }),
+    expect.objectContaining({
+      phase: 'initial',
+      origin: 'unknown',
+      actualPath: 'unknown',
+      tabStatus: 'loading',
+      reason: 'waiting',
+    }),
+    expect.objectContaining({
+      phase: 'target-loading',
+      origin: 'youtube',
+      actualPath: '/feed/playlists',
+      marker: 'matching',
+      reason: 'waiting',
+    }),
+    expect.objectContaining({
+      phase: 'target-ready',
+      targetPath: '/feed/playlists',
+      tabStatus: 'complete',
+      marker: 'matching',
+      reason: 'ready',
+    }),
+  ]);
+});
+
+test('playlist feed reads a target with a stripped marker but never closes its tab', async ({
+  page,
+}) => {
+  await seed(page);
+  await fakePlaylistFeed(page, null, 'marker-stripped');
+  const panel = await openPlaylistFeed(page);
+  await expect(
+    panel.getByRole('button', { name: 'Playlists aktualisieren', exact: true }),
+  ).toBeEnabled();
+  await expect(
+    panel
+      .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+      .getByRole('listitem'),
+  ).toHaveCount(2);
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+  ).toMatchObject({
+    connections: [{ tabId: 321, name: 'latersift-readonly-v1' }],
+    requests: [{ type: 'playlists' }, { ack: 1 }],
+    acknowledgedAfterSave: true,
+    disconnected: true,
+    removed: [],
+  });
+  expect(await readWorkTabDiagnostics(page)).toEqual([
+    expect.objectContaining({
+      phase: 'target-ready',
+      marker: 'absent',
+      reason: 'marker_lost',
+    }),
+    expect.objectContaining({
+      phase: 'target-ready',
+      marker: 'absent',
+      reason: 'ready',
+    }),
+  ]);
+  await expect(
+    panel.getByText(/Dieser Tab bleibt zur manuellen Bereinigung erhalten/),
+  ).toBeVisible();
+});
+
+for (const navigation of ['redirect', 'consent'] as const) {
+  test(`playlist feed rejects a completed ${navigation} without scanning or closing and exposes sanitized diagnostics without a catalog`, async ({
+    page,
+  }) => {
+    await seed(page);
+    await fakePlaylistFeed(page, null, navigation);
+    const panel = await openPlaylistFeed(page);
+    await expect(
+      panel.getByRole('button', {
+        name: 'Playlists aktualisieren',
+        exact: true,
+      }),
+    ).toBeEnabled();
+    await expect(panel.getByRole('alert')).toContainText(
+      'Playlist-Aktualisierung unterbrochen',
+    );
+    await expect(
+      panel.getByRole('list', { name: 'Verifizierte Playlist-IDs' }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+    ).toMatchObject({
+      created: [
+        {
+          url: expect.stringMatching(
+            /^https:\/\/www\.youtube\.com\/feed\/playlists#latersift-work=/,
+          ),
+          active: false,
+        },
+      ],
+      connections: [],
+      requests: [],
+      acknowledgedAfterSave: false,
+      removed: [],
+    });
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem('latersift-playlist-catalog-v1'),
+      ),
+    ).toBeNull();
+    expect(await readWorkTabDiagnostics(page)).toEqual([
+      expect.objectContaining({
+        tabStatus: 'complete',
+        phase: 'foreign-navigation',
+        targetPath: '/feed/playlists',
+        actualPath: navigation === 'redirect' ? '/feed/library' : '/m',
+        origin: navigation === 'redirect' ? 'youtube' : 'consent',
+        marker: 'different',
+        reason:
+          navigation === 'redirect'
+            ? 'unexpected_youtube_destination'
+            : 'consent_required',
+      }),
+    ]);
+    if (navigation === 'consent') {
+      await expect(
+        panel.getByText(
+          /LaterSift bestätigt nichts und aktiviert keinen Tab\s+automatisch/,
+        ),
+      ).toBeVisible();
+    }
+  });
+}
 
 test('successive partial playlist refreshes retain older IDs without duplicating current entries, including after reload', async ({
   page,

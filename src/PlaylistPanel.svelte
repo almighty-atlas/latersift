@@ -3,7 +3,12 @@
   import type { Runtime } from 'webextension-polyfill';
   import type { PlaylistCatalog, PlaylistEntry } from './adapter/playlists';
   import { connectRead, activateYouTubeTab } from './bridge';
-  import { createWorkTab, waitForWorkTab } from './work-tabs';
+  import {
+    createWorkTab,
+    waitForWorkTab,
+    type WorkTabDiagnostic,
+  } from './work-tabs';
+  import WorkTabDiagnostics from './WorkTabDiagnostics.svelte';
 
   let {
     disabled = false,
@@ -13,6 +18,11 @@
   let previous = $state<PlaylistEntry[]>([]);
   let busy = $state(false);
   let error = $state('');
+  let workTabReports = $state<WorkTabDiagnostic[]>([]);
+  function recordWorkTab(report: WorkTabDiagnostic) {
+    if (JSON.stringify(workTabReports.at(-1)) !== JSON.stringify(report))
+      workTabReports = [...workTabReports.slice(-11), report];
+  }
   let tabId = $state<number | null>(null);
   let port = $state.raw<Runtime.Port | null>(null);
   let disposed = false;
@@ -43,6 +53,7 @@
     if (busy || disabled) return;
     busy = true;
     error = '';
+    workTabReports = [];
     previous = [
       ...new Map(
         [...previous, ...(catalog?.entries ?? [])].map((entry) => [
@@ -56,7 +67,7 @@
       localStorage.setItem(`${key}-previous`, JSON.stringify(previous));
       work = await createWorkTab('playlists');
       tabId = work.tabId;
-      await waitForWorkTab(work.tabId);
+      await waitForWorkTab(work.tabId, recordWorkTab);
       if (disposed) return;
       await new Promise<void>((resolve, reject) => {
         void connectRead<PlaylistCatalog>(
@@ -127,6 +138,7 @@
     >
   {/if}
   {#if error}<p role="alert" class="error">{error}</p>{/if}
+  <WorkTabDiagnostics reports={workTabReports} />
   {#if catalog}
     <p role="status">
       {catalog.entries.length} Playlists · {catalog.status === 'running'

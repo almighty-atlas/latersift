@@ -1,6 +1,29 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.3 / M3.2 – lesender Hintergrundbetrieb
+## Aktuell: 0.2.4 / M3.2.1 – Arbeitstab-Readiness und Diagnose
+
+Basis: **0.2.3**, Stand: 18.10.2026. [M3.2.1: Codeursache, Vertrag, Evidenz und nächster Zen-Test](M3.2.1.md). Nutzerbestätigter Fehler in Zen mit LaterSift 0.2.3: **„Work tab navigated away from its marked source.“** Die konkrete auslösende Navigation bzw. Ladephase beim Nutzer ist **noch nicht diagnostisch bestätigt**; kein angemeldeter Zen-Reproduktionstest.
+
+- **Belegte Codeursache:** `waitForWorkTab` verwendete die strikte Eigentumsprüfung `matches` als Readiness-Bedingung, bevor der Ladezustand berücksichtigt wurde. Initiales `about:blank`, fehlende URL oder Verlust des UUID-Fragments konnten damit fälschlich als Wegnavigation gelten. Das ist ein Codebefund, kein Nachweis des konkreten Nutzertriggers.
+- **Readiness:** initial `about:blank`/fehlende URL/`loading` begrenzt bis 30 Sekunden pollen. Lesbar nur `https://www.youtube.com/feed/playlists` ohne Query, optional abschließender Slash, oder exakt `https://www.youtube.com/playlist?list=WL`; Fragment jeweils optional. Fremde abgeschlossene Ziele nie akzeptieren, insbesondere kein Consent und keine anderen Feed-Aliasse. Zieladresse bleibt unverändert.
+- **Cleanup separat und strenger:** passende Tab-ID, exakte ursprüngliche URL mit UUID, `complete`, keine abweichende `pendingUrl`. Create-Snapshots werden bereits vor dem Journaling berücksichtigt. Beobachteter Markerverlust, abweichende initiale Lade-URL oder abweichende Pending-URL widerrufen Cleanup-Eigentum dauerhaft, auch bei späterer Rückkehr des Markers. Der Quellen-Lock bleibt für den weiterhin lesbaren Tab bis `close()` gehalten. Ladezustand oder unverifizierbarer Kontext erlaubt kein Schließen; Tabs dürfen offen bleiben.
+- **Diagnose in beiden Importwegen:** feste Enums und freigegebene Pfadkategorien, schon vor Katalog bzw. erstem Checkpoint sichtbar; keine IDs, Hashwerte oder vollständigen URLs. `pendingUrl` ist weder erforderlich noch positiver Readiness-Beleg; MDN nennt dafür ausdrücklich die `tabs`-Berechtigung. Diese wird nicht hinzugefügt. Eine auf fremdem Host fehlende `tab.url` kann zu Timeout/`unknown` führen, nicht zu einer behaupteten Anmeldung/Consent-Ursache.
+- **Aktuell vom Hauptagenten tatsächlich ausgeführte Netzwerkproben (nicht angemeldet):** Python `urllib` auf `/feed/playlists` lieferte HTTP 200, gleiche finale URL und gleichen Pfad, keinen Redirect und keine Canonical-Links. Eine frische Headless-Firefox-157-Browserprobe endete dagegen auf `consent.youtube.com/m`, mit erhaltenem Marker. Belegt ist eine client-/kontextabhängig mögliche Consent-Weiterleitung, weder eine veraltete Zieladresse noch die Ursache im angemeldeten Zen des Nutzers.
+
+Keine neuen Berechtigungen, YouTube-Writes oder Schreibgates; bestehende Identitäts-, Vollständigkeits- und Schreibprüfungen bleiben unverändert. Nächster Schritt: beide lesenden Wege getrennt in Zen mit bereinigter Diagnose testen.
+
+### Qualitätsergebnisse 0.2.4
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **723/723 in 18 Dateien**, darunter **97 Arbeitstab-Tests**. Initiales `about:blank`, fehlende/verzögerte URL, Markerverlust, Create-Snapshots, Pending-URL ohne zusätzliche Rechte, YouTube-/Consent-/Anmelde-Redirects, Fremdnavigation, Timeout und dauerhaftes Aufgeben der Schließberechtigung geprüft.
+- `pnpm test:ui`: **74/74 in Chromium und Firefox**, mit Read-only-Mock-Transport und bereinigter Diagnose auch bei abgewiesener Navigation ohne Katalog. Verzögerter Start und markerloses Lesen ohne automatisches Schließen geprüft. Kein angemeldeter YouTube-Import bei diesen Fixtures.
+- `pnpm package`: Produktionsbuild und `artifacts/latersift-0.2.4-unsigned.xpi` erfolgreich. `pnpm lint:extension`: **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- `pnpm test:firefox-extension` und `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.4-unsigned.xpi node scripts/test-firefox.mjs`: echtes MV3-Add-on aus `dist` und finaler XPI in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
+- SHA-256 der lokal getesteten XPI: `195db9a57f194e04baa4c2abdc6ed9410820bbd6d4a8463ff15ae0c8d9ab580d`.
+
+Die unangemeldeten Netzwerkproben oben sind keine Live-Abnahme der Playlist-Erkennung und keine bestätigte Erklärung des konkreten Zen-Fehlers. Keine Signierung/AMO-Veröffentlichung. Historische Ergebnisse unten gelten nicht als Nachweis für 0.2.4.
+
+## Historischer Stand: 0.2.3 / M3.2 – lesender Hintergrundbetrieb
 
 Basis: **0.2.2**, Stand: 18.10.2026. Dokumentierter Implementierungsvertrag, **keine Live-Abnahme**. Keine Live-DOM-Aufnahme des Playlist-Feeds und kein angemeldeter Zen-Test verfügbar. [M3.2: Vertrag, Grenzen und getrennte manuelle Checklisten](M3.2.md).
 
