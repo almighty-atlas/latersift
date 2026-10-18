@@ -145,7 +145,7 @@ Alle manuellen Resultate mit tatsächlichem Befund dokumentieren. **Kein Live-M3
 
 ## 0.2.11 Schnellimport
 
-`tests/scanner.test.ts` verbindet den Scanner mit dem tatsächlichen Scrolladapter:
+`tests/scanner-fast.test.ts` verbindet den Scanner mit dem tatsächlichen Scrolladapter:
 anfänglich fehlende Positionen/Zeilen/Geometrie und temporäre Ladeplatzhalter,
 stabiler Start, tatsächlich ausgeführte Endsprünge, DOM-Wachstum
 100 → 200 → 300 ohne schrittweise Anfahrt, Checkpoint vor Sprung und erneute
