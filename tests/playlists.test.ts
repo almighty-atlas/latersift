@@ -84,7 +84,8 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     );
     const result = await run(env);
     expect(result.entries).toEqual([]);
-    expect(result.status).toBe('partial');
+    expect(result.status).toBe('failed');
+    expect(result.diagnostics.reason).toBe('unsupported_dom');
     expect(result.diagnostics.unsupportedCards).toBe(1);
   });
 
@@ -184,7 +185,9 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
     const result = await run(env);
     expect(result.entries).toEqual([]);
     expect(result.diagnostics.continuationSeen).toBe(false);
-    expect(result.status).toBe('partial');
+    expect(result.status).toBe('failed');
+    expect(result.diagnostics.reason).toBe('unsupported_dom');
+    expect(result.diagnostics.parser?.latest.hidden_card).toBe(1);
   });
 
   it('waits through delayed continuation loading and retains virtualized entries', async () => {
@@ -364,11 +367,359 @@ describe('playlist catalog — synthetic DOM, not live-site validation', () => {
       status: 'failed',
       diagnostics: {
         reason: 'checkpoint_error',
-        checkpointError: 'Error: Synthetic storage failure',
+        checkpointError: 'checkpoint_failed',
       },
     });
     expect(result.entries).toHaveLength(1);
     expect(env.advance).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no_playlist_link', '<span id="playlist-title">Title</span>'],
+    [
+      'conflicting_playlist_ids',
+      '<a href="/playlist?list=PL_one" id="playlist-title">Title</a><a href="/playlist?list=PL_two">Other</a>',
+    ],
+    ['missing_title_node', '<a href="/playlist?list=PL_one">Thumbnail</a>'],
+    [
+      'conflicting_titles',
+      '<a href="/playlist?list=PL_one" id="playlist-title">One</a><span id="video-title">Two</span>',
+    ],
+    [
+      'ambiguous_title_link',
+      '<a href="/playlist?list=PL_one">Thumbnail</a><a href="/watch?v=video" id="video-title">Title</a>',
+    ],
+    [
+      'incomplete_rendering',
+      '<a href="/playlist?list=PL_one" id="playlist-title"></a>',
+    ],
+    ['hidden_card', '<div hidden><span id="playlist-title">Title</span></div>'],
+  ] as const)(
+    'reports fixed rejection %s without polling inflation',
+    async (reason, content) => {
+      const { env } = fixture(
+        `<ytd-playlist-renderer ${reason === 'hidden_card' ? 'hidden' : ''}>${content}</ytd-playlist-renderer>`,
+      );
+      const result = await run(env);
+      expect(result.status).toBe('failed');
+      expect(result.diagnostics.reason).toBe('unsupported_dom');
+      expect(result.diagnostics.parser?.latest[reason]).toBe(1);
+      expect(result.diagnostics.parser?.peaks[reason]).toBe(1);
+      expect(result.diagnostics.parser?.samples[0].reasons).toContain(reason);
+      expect(result.diagnostics.rounds).toBeGreaterThan(1);
+    },
+  );
+
+  it('counts all applicable reasons but does not guess incomplete rendering', async () => {
+    const { env } = fixture(
+      '<ytd-playlist-renderer></ytd-playlist-renderer><ytd-grid-playlist-renderer><a href="" id="playlist-title"></a></ytd-grid-playlist-renderer>',
+    );
+    const result = await run(env);
+    expect(result.diagnostics.parser?.latest).toEqual({
+      no_playlist_link: 2,
+      missing_title_node: 1,
+      incomplete_rendering: 1,
+      conflicting_playlist_ids: 0,
+      conflicting_titles: 0,
+      ambiguous_title_link: 0,
+      hidden_card: 0,
+    });
+    expect(result.diagnostics.parser?.samples[0].reasons).not.toContain(
+      'incomplete_rendering',
+    );
+  });
+
+  it('explains four unsupported cards with non-scrollable geometry without blaming scrolling', async () => {
+    const { env } = fixture(`
+      <ytd-playlist-renderer><a href="/watch?v=video" id="playlist-title">Title</a></ytd-playlist-renderer>
+      <ytd-playlist-renderer><a href="/playlist?list=PL_one">Thumbnail</a></ytd-playlist-renderer>
+      <ytd-grid-playlist-renderer><a href="/playlist?list=PL_two" id="playlist-title"></a></ytd-grid-playlist-renderer>
+      <ytd-rich-item-renderer><yt-lockup-view-model><a href="/playlist?list=PL_three">Thumbnail</a><h3 class="yt-lockup-metadata-view-model__title"><a href="/watch?v=video">Video</a></h3></yt-lockup-view-model></ytd-rich-item-renderer>`);
+    env.scrollInfo = () => ({ top: 0, height: 1258, viewport: 1258 });
+    const result = await run(env);
+    expect(result).toMatchObject({
+      status: 'failed',
+      diagnostics: {
+        reason: 'unsupported_dom',
+        rounds: 6,
+        unsupportedCards: 4,
+        scrollAvailability: 'not_scrollable',
+        continuationSeen: false,
+        cardCount: { initial: 4, latest: 4, max: 4 },
+        parser: {
+          sources: {
+            'ytd-playlist-renderer': 2,
+            'ytd-grid-playlist-renderer': 1,
+            'yt-lockup-view-model': 1,
+          },
+        },
+      },
+    });
+    expect(
+      result.diagnostics.parser?.samples.map((sample) => sample.reasons),
+    ).toEqual([
+      ['no_playlist_link'],
+      ['missing_title_node'],
+      ['incomplete_rendering'],
+      ['ambiguous_title_link'],
+    ]);
+  });
+
+  it('distinguishes no candidate containers from unsupported or proven empty', async () => {
+    const { env } = fixture(
+      '<a href="/playlist?list=PL_outside" id="playlist-title">Outside</a>',
+    );
+    const result = await run(env);
+    expect(result).toMatchObject({
+      status: 'failed',
+      diagnostics: {
+        reason: 'no_card_containers',
+        cardCount: { initial: 0, latest: 0, max: 0 },
+        scrollAvailability: 'unavailable',
+        completenessVerified: false,
+      },
+    });
+    expect(result.diagnostics.parser?.samples).toEqual([]);
+    expect(env.wait).toHaveBeenCalledTimes(5);
+  });
+
+  it('waits for initially rejected cards to render and succeeds without scrollable geometry', async () => {
+    const { env, doc } = fixture(
+      '<ytd-playlist-renderer><a href="" id="playlist-title"></a></ytd-playlist-renderer>',
+    );
+    env.scrollInfo = () => ({ top: 0, height: 1258, viewport: 1258 });
+    let rounds = 0;
+    env.advance = vi.fn(() => {
+      if (++rounds === 4) doc.body.innerHTML = card();
+    });
+    const result = await run(env);
+    expect(result.status).toBe('partial');
+    expect(result.entries).toHaveLength(1);
+    expect(result.diagnostics.parser?.latest.incomplete_rendering).toBe(0);
+    expect(result.diagnostics.parser?.peaks.incomplete_rendering).toBe(1);
+    expect(result.diagnostics.cardCount?.changes).toEqual([
+      { round: 1, total: 1, accepted: 0, rejected: 1, hidden: 0 },
+      { round: 5, total: 1, accepted: 1, rejected: 0, hidden: 0 },
+    ]);
+  });
+
+  it('preserves acceptance with ignored ambiguous or empty title nodes', async () => {
+    const { env } = fixture(
+      card(
+        'PL_one',
+        'Good',
+        '<span id="video-title"></span><a href="/watch?v=video" id="playlist-title">Video</a>',
+      ),
+    );
+    const result = await run(env);
+    expect(result.entries[0].name).toBe('Good');
+    expect(Object.values(result.diagnostics.parser!.latest)).toEqual(
+      Array(7).fill(0),
+    );
+  });
+
+  it('tracks card growth, continuation rounds, explicit pagination and optional scroll diagnostics', async () => {
+    const { env, doc } = fixture(
+      card() +
+        '<a rel="next" href="/anything">Private label</a><button rel="next">Secret</button><button>Next</button><a rel="next" hidden>Hidden</a>',
+    );
+    const click = vi.fn();
+    doc.addEventListener('click', click);
+    let calls = 0;
+    let height = 1000;
+    env.scrollInfo = () => ({ top: 0, height, viewport: 2000 });
+    env.scrollDiagnostics = () => ({
+      containers: [
+        {
+          tag: 'document',
+          top: 0,
+          height,
+          viewport: 2000,
+          selected: true,
+          scrollable: false,
+        },
+      ],
+      inspectedElements: 3,
+      truncated: false,
+    });
+    env.advance = vi.fn(() => {
+      calls++;
+      if (calls === 1) {
+        doc.body.insertAdjacentHTML(
+          'beforeend',
+          card('PL_two') +
+            '<ytd-continuation-item-renderer></ytd-continuation-item-renderer>',
+        );
+        height = 1200;
+      }
+      if (calls === 3)
+        doc.querySelector('ytd-continuation-item-renderer')?.remove();
+    });
+    const result = await run(env);
+    expect(result.diagnostics).toMatchObject({
+      cardCount: { initial: 1, latest: 2, max: 2 },
+      loadingEvidence: {
+        cardGrowths: 1,
+        heightGrowths: 1,
+        continuationRounds: 2,
+        continuationAppearances: 1,
+      },
+      continuation: false,
+      continuationSeen: true,
+      pagination: { nextAnchors: 1, nextButtons: 1 },
+      scrollContainers: env.scrollDiagnostics(),
+    });
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('bounds structural samples and change history and records sources without arbitrary DOM values', async () => {
+    const secret = 'PRIVATE_SENTINEL';
+    const html = `<ytd-playlist-renderer data-secret="${secret}"><secret-${secret.toLowerCase()} class="${secret}">${secret}</secret-${secret.toLowerCase()}>
+      <a href="/playlist?list=PL_${secret}">Thumbnail ${secret}</a>
+      <a href="/watch?v=${secret}" id="playlist-title">${secret}</a>
+      <a href="/channel/${secret}"></a><a href="https://${secret}.example/path"></a>
+      <a href="/other/${secret}"></a><a href="javascript:${secret}"></a><a data-secret="${secret}"></a>
+      <h3 class="yt-lockup-metadata-view-model__title">${secret}</h3><span id="video-title">Different title</span>
+    </ytd-playlist-renderer>`;
+    // The second, conflicting valid title makes every sample a rejected card.
+    const { env, doc } = fixture(html.repeat(14));
+    let calls = 0;
+    env.advance = vi.fn(() => {
+      if (++calls <= 15) doc.body.insertAdjacentHTML('beforeend', html);
+    });
+    const result = await run(env);
+    const json = JSON.stringify(result.diagnostics);
+    expect(json).not.toContain(secret);
+    expect(json).not.toContain(secret.toLowerCase());
+    expect(json).not.toContain('secret-');
+    expect(json).not.toContain('javascript:');
+    expect(result.diagnostics.parser?.samples).toHaveLength(12);
+    expect(result.diagnostics.parser?.samplesTruncated).toBe(true);
+    expect(result.diagnostics.cardCount?.changes).toHaveLength(12);
+    expect(result.diagnostics.parser?.samples[0]).toMatchObject({
+      tag: 'ytd-playlist-renderer',
+      childTags: { other: 1, a: 7, h3: 1, span: 1 },
+      titleNodes: { playlistTitle: 1, videoTitle: 1, lockupTitle: 1 },
+      links: {
+        playlist: 1,
+        watch: 1,
+        channel: 1,
+        external: 1,
+        other: 1,
+        invalid: 1,
+        missing: 1,
+      },
+      distinctValidIds: 1,
+    });
+  });
+
+  it('keeps some accepted entries partial despite rejected siblings', async () => {
+    const { env } = fixture(
+      card() + '<ytd-playlist-renderer></ytd-playlist-renderer>',
+    );
+    const result = await run(env);
+    expect(result.status).toBe('partial');
+    expect(result.entries).toHaveLength(1);
+    expect(result.diagnostics.cardCount?.changes[0]).toMatchObject({
+      total: 2,
+      accepted: 1,
+      rejected: 1,
+    });
+  });
+
+  it.each(['abort', 'error'] as const)(
+    'does not replace %s with an unsupported DOM failure',
+    async (kind) => {
+      const { env } = fixture(
+        '<ytd-playlist-renderer></ytd-playlist-renderer>',
+      );
+      const controller = new AbortController();
+      env.wait = async () => {
+        if (kind === 'abort') controller.abort();
+        throw new Error('PRIVATE_SENTINEL');
+      };
+      const result = await scanPlaylists(env, controller.signal, () => {});
+      expect(result.diagnostics.reason).toBe(
+        kind === 'abort' ? 'aborted' : 'scanner_error',
+      );
+      expect(JSON.stringify(result.diagnostics)).not.toContain(
+        'PRIVATE_SENTINEL',
+      );
+    },
+  );
+
+  it.each(['abort', 'error'] as const)(
+    'preserves the original %s reason if the terminal checkpoint also fails',
+    async (kind) => {
+      const { env } = fixture(
+        '<ytd-playlist-renderer></ytd-playlist-renderer>',
+      );
+      const controller = new AbortController();
+      env.wait = async () => {
+        if (kind === 'abort') controller.abort();
+        throw new Error('PRIVATE_SCANNER_ERROR');
+      };
+      const result = await scanPlaylists(env, controller.signal, (snapshot) => {
+        if (snapshot.status !== 'running')
+          throw new Error('PRIVATE_STORAGE_ERROR');
+      });
+      expect(result.diagnostics.reason).toBe(
+        kind === 'abort' ? 'aborted' : 'scanner_error',
+      );
+      expect(result.diagnostics.checkpointError).toBe('checkpoint_failed');
+      expect(JSON.stringify(result.diagnostics)).not.toContain('PRIVATE_');
+    },
+  );
+
+  it('observes delayed candidate containers before declaring a failure', async () => {
+    const { env, doc } = fixture('');
+    let calls = 0;
+    env.advance = vi.fn(() => {
+      if (++calls === 4) doc.body.innerHTML = card();
+    });
+    const result = await run(env);
+    expect(result.status).toBe('partial');
+    expect(result.entries).toHaveLength(1);
+    expect(result.diagnostics.cardCount).toMatchObject({
+      initial: 0,
+      latest: 1,
+      max: 1,
+    });
+    expect(result.diagnostics.loadingEvidence?.cardGrowths).toBe(1);
+  });
+
+  it('remembers candidate evidence even when rejected cards disappear', async () => {
+    const { env, doc } = fixture(
+      '<ytd-playlist-renderer hidden></ytd-playlist-renderer>',
+    );
+    env.advance = vi.fn(() => {
+      doc.body.innerHTML = '';
+    });
+    const result = await run(env);
+    expect(result.diagnostics.reason).toBe('unsupported_dom');
+    expect(result.diagnostics.cardCount).toMatchObject({
+      initial: 1,
+      latest: 0,
+      max: 1,
+    });
+    expect(result.diagnostics.parser?.latest.hidden_card).toBe(0);
+    expect(result.diagnostics.parser?.peaks.hidden_card).toBe(1);
+  });
+
+  it('never copies checkpoint exception contents into diagnostics', async () => {
+    const { env } = fixture();
+    const result = await scanPlaylists(
+      env,
+      new AbortController().signal,
+      () => {
+        throw new Error('PRIVATE_SENTINEL https://secret.example/secret');
+      },
+    );
+    expect(result.diagnostics.checkpointError).toBe('checkpoint_failed');
+    expect(JSON.stringify(result.diagnostics)).not.toContain(
+      'PRIVATE_SENTINEL',
+    );
+    expect(JSON.stringify(result.diagnostics)).not.toContain('secret.example');
   });
 
   it('checkpoints detached snapshots and does not click or mutate the document', async () => {

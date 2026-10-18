@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { Scan } from '../../src/model';
+import type { PlaylistCatalog } from '../../src/adapter/playlists';
 
 async function seed(
   page: Page,
@@ -593,9 +594,10 @@ async function fakePlaylistFeed(
   batches: { id: string; name: string }[][] | null = null,
   navigation:
     'delayed' | 'marker-stripped' | 'redirect' | 'consent' | null = null,
+  fixture: Partial<PlaylistCatalog> | Record<string, unknown> = {},
 ) {
   await page.addInitScript(
-    ({ batches, navigation }) => {
+    ({ batches, navigation, fixture }) => {
       let refreshIndex = 0;
       const tabReads: string[] = [];
       Object.assign(globalThis, {
@@ -705,6 +707,7 @@ async function fakePlaylistFeed(
                     ownership: 'unknown',
                   }))
                 : catalog.entries,
+              ...fixture,
             };
             let reply: (message: unknown) => void;
             return {
@@ -743,9 +746,461 @@ async function fakePlaylistFeed(
         playlistTransport: transport,
       });
     },
-    { batches, navigation },
+    { batches, navigation, fixture },
   );
 }
+
+function rejectedPlaylistFeed(): PlaylistCatalog {
+  const reasons = {
+    no_playlist_link: 2,
+    conflicting_playlist_ids: 1,
+    missing_title_node: 1,
+    conflicting_titles: 0,
+    ambiguous_title_link: 0,
+    hidden_card: 0,
+    incomplete_rendering: 0,
+  };
+  return {
+    entries: [],
+    status: 'failed',
+    updatedAt: '2026-10-18T00:00:00Z',
+    message: 'Vier Karten erkannt, keine Playlist sicher identifiziert.',
+    diagnostics: {
+      reason: 'unsupported_dom',
+      rounds: 5,
+      scrollAttempts: 4,
+      observedScrolls: 0,
+      scroll: { container: 'document', top: 0, height: 1258, viewport: 1258 },
+      continuation: false,
+      continuationSeen: false,
+      unsupportedCards: 4,
+      expectedCount: null,
+      completenessVerified: false,
+      parser: {
+        latest: { ...reasons },
+        peaks: { ...reasons },
+        sources: { 'yt-lockup-view-model': 4 },
+        samplesTruncated: false,
+        samples: [
+          ['no_playlist_link'],
+          ['no_playlist_link'],
+          ['conflicting_playlist_ids'],
+          ['missing_title_node'],
+        ].map((reasons, index) => ({
+          index,
+          tag: 'yt-lockup-view-model',
+          reasons: reasons as NonNullable<
+            PlaylistCatalog['diagnostics']['parser']
+          >['samples'][number]['reasons'],
+          titleNodes: {
+            playlistTitle: 0,
+            videoTitle: 0,
+            lockupTitle: index === 3 ? 0 : 1,
+          },
+          childTags: { a: 1, h3: 1 },
+          links: {
+            playlist: index < 2 ? 0 : index === 2 ? 2 : 1,
+            watch: index < 2 ? 1 : 0,
+            channel: 0,
+            external: 0,
+            other: 0,
+            invalid: 0,
+            missing: 0,
+          },
+          distinctValidIds: index < 2 ? 0 : index === 2 ? 2 : 1,
+        })),
+      },
+      cardCount: {
+        initial: 4,
+        latest: 4,
+        max: 4,
+        changes: [{ round: 1, total: 4, accepted: 0, rejected: 4, hidden: 0 }],
+      },
+      scrollAvailability: 'not_scrollable',
+      loadingEvidence: {
+        cardGrowths: 0,
+        heightGrowths: 0,
+        continuationRounds: 0,
+        continuationAppearances: 0,
+      },
+      pagination: { nextAnchors: 0, nextButtons: 0 },
+      scrollContainers: {
+        inspectedElements: 18,
+        truncated: false,
+        containers: [
+          {
+            tag: 'document',
+            top: 0,
+            height: 1258,
+            viewport: 1258,
+            selected: true,
+            scrollable: false,
+          },
+        ],
+      },
+    },
+  };
+}
+
+async function readPlaylistFeedDiagnostic(page: Page) {
+  const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+  const textarea = panel.getByRole('textbox', {
+    name: 'Bereinigte Playlist-Feed-Diagnose',
+  });
+  await expect(textarea).not.toBeVisible();
+  await panel
+    .getByText('Technische Playlist-Diagnose', { exact: true })
+    .click();
+  await expect(textarea).toBeVisible();
+  await expect(textarea).toHaveAttribute('readonly', '');
+  return { panel, textarea, text: await textarea.inputValue() };
+}
+
+test('0.2.4 four rejected cards report unsupported DOM independently of ready work-tab navigation', async ({
+  page,
+}) => {
+  await seed(page);
+  const fixture = rejectedPlaylistFeed();
+  await fakePlaylistFeed(page, null, null, fixture);
+  const panel = await openPlaylistFeed(page);
+  await expect(panel.getByRole('status')).toContainText(
+    '0 Playlists · Nicht unterstützte Playlist-Struktur (unsupported_dom)',
+  );
+  await expect(panel.getByRole('status')).not.toContainText('Teilbestand');
+  await expect(
+    panel
+      .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+      .getByRole('listitem'),
+  ).toHaveCount(0);
+  await expect(
+    panel.getByRole('button', { name: 'Playlists aktualisieren', exact: true }),
+  ).toBeEnabled();
+  const navigation = await readWorkTabDiagnostics(page);
+  expect(navigation.at(-1)).toMatchObject({
+    phase: 'target-ready',
+    reason: 'ready',
+    marker: 'matching',
+  });
+  const { text } = await readPlaylistFeedDiagnostic(page);
+  const report = JSON.parse(text);
+  expect(report.reason).toBe('unsupported_dom');
+  // Latest and peaks are per-round snapshots, not four cards times five rounds.
+  expect(report.parser.latest).toEqual({
+    no_playlist_link: 2,
+    conflicting_playlist_ids: 1,
+    missing_title_node: 1,
+    conflicting_titles: 0,
+    ambiguous_title_link: 0,
+    hidden_card: 0,
+    incomplete_rendering: 0,
+  });
+  expect(report.parser.peaks).toEqual(report.parser.latest);
+  expect(report.parser.samples).toEqual(fixture.diagnostics.parser!.samples);
+  expect(report.parser.sources).toEqual({ 'yt-lockup-view-model': 4 });
+  expect(report.cardCount).toEqual({
+    initial: 4,
+    latest: 4,
+    max: 4,
+    changes: [{ round: 1, total: 4, accepted: 0, rejected: 4, hidden: 0 }],
+  });
+  expect(report).toMatchObject({
+    rounds: 5,
+    scrollAttempts: 4,
+    observedScrolls: 0,
+    scroll: { container: 'document', top: 0, height: 1258, viewport: 1258 },
+    scrollAvailability: 'not_scrollable',
+    unsupportedCards: 4,
+    loadingEvidence: {
+      cardGrowths: 0,
+      heightGrowths: 0,
+      continuationRounds: 0,
+      continuationAppearances: 0,
+    },
+  });
+  expect(report.scrollContainers).toEqual(fixture.diagnostics.scrollContainers);
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('latersift-playlist-catalog-v1')!),
+    ),
+  ).toEqual(fixture);
+});
+
+test('missing playlist card containers have a distinct failure status', async ({
+  page,
+}) => {
+  await seed(page);
+  const fixture = rejectedPlaylistFeed();
+  fixture.diagnostics.reason = 'no_card_containers';
+  fixture.diagnostics.unsupportedCards = 0;
+  fixture.diagnostics.parser = {
+    latest: {
+      no_playlist_link: 0,
+      conflicting_playlist_ids: 0,
+      missing_title_node: 0,
+      conflicting_titles: 0,
+      ambiguous_title_link: 0,
+      hidden_card: 0,
+      incomplete_rendering: 0,
+    },
+    peaks: {
+      no_playlist_link: 0,
+      conflicting_playlist_ids: 0,
+      missing_title_node: 0,
+      conflicting_titles: 0,
+      ambiguous_title_link: 0,
+      hidden_card: 0,
+      incomplete_rendering: 0,
+    },
+    sources: {},
+    samples: [],
+    samplesTruncated: false,
+  };
+  fixture.diagnostics.cardCount = {
+    initial: 0,
+    latest: 0,
+    max: 0,
+    changes: [{ round: 1, total: 0, accepted: 0, rejected: 0, hidden: 0 }],
+  };
+  await fakePlaylistFeed(page, null, null, fixture);
+  const panel = await openPlaylistFeed(page);
+  await expect(panel.getByRole('status')).toContainText(
+    'Keine unterstützten Kartencontainer (no_card_containers)',
+  );
+  await expect(panel.getByRole('status')).not.toContainText('unsupported_dom');
+  await expect(panel.getByRole('status')).not.toContainText('Teilbestand');
+  const { text } = await readPlaylistFeedDiagnostic(page);
+  expect(JSON.parse(text)).toMatchObject({
+    reason: 'no_card_containers',
+    unsupportedCards: 0,
+    cardCount: { latest: 0 },
+    parser: { samples: [], sources: {} },
+  });
+});
+
+for (const clipboard of ['success', 'denied', 'unavailable'] as const) {
+  test(`playlist feed diagnostic is sanitized and copy handles clipboard ${clipboard}`, async ({
+    page,
+  }) => {
+    await seed(page);
+    const fixture = rejectedPlaylistFeed();
+    const privateText =
+      'PRIVATE_NAME PLprivateDiagnostic123 https://private.example/playlist?list=SECRET <script>PRIVATE_SCRIPT</script>';
+    const diagnostics = fixture.diagnostics;
+    await fakePlaylistFeed(page, null, null, {
+      ...fixture,
+      diagnostics: {
+        ...diagnostics,
+        name: privateText,
+        id: privateText,
+        url: privateText,
+        raw: { privateText },
+        rawErrors: [privateText],
+        checkpointError: privateText,
+        scroll: {
+          ...diagnostics.scroll,
+          container: privateText,
+          raw: privateText,
+        },
+        parser: {
+          ...diagnostics.parser,
+          raw: privateText,
+          latest: { ...diagnostics.parser!.latest, [privateText]: 99 },
+          sources: { 'yt-lockup-view-model': 4, [privateText]: 99 },
+          samples: diagnostics.parser!.samples.map((sample) => ({
+            ...sample,
+            name: privateText,
+            id: privateText,
+            url: privateText,
+            rawErrors: [privateText],
+            tag: privateText,
+            childTags: { a: 1, [privateText]: 99 },
+            reasons: [...sample.reasons, privateText],
+            links: { ...sample.links, [privateText]: 99 },
+          })),
+        },
+        scrollContainers: {
+          ...diagnostics.scrollContainers,
+          containers: [
+            {
+              tag: privateText,
+              top: 0,
+              height: 1258,
+              viewport: 1258,
+              selected: true,
+              scrollable: false,
+              raw: privateText,
+            },
+          ],
+        },
+      },
+    });
+    await page.addInitScript((mode) => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value:
+          mode === 'unavailable'
+            ? undefined
+            : {
+                writeText: async (text: string) => {
+                  Object.assign(globalThis, { attemptedPlaylistCopy: text });
+                  if (mode === 'denied')
+                    throw new DOMException(
+                      'PRIVATE_CLIPBOARD_ERROR',
+                      'NotAllowedError',
+                    );
+                  Object.assign(globalThis, { copiedPlaylistDiagnostic: text });
+                },
+              },
+      });
+    }, clipboard);
+    await openPlaylistFeed(page);
+    const { panel, textarea, text } = await readPlaylistFeedDiagnostic(page);
+    expect(text).not.toMatch(
+      /PRIVATE_|PLprivate|https?:|private\.example|SECRET|<script>|rawErrors|"raw"|"name"|"id"|"url"/,
+    );
+    const report = JSON.parse(text);
+    expect(report.checkpointError).toBe('checkpoint_failed');
+    expect(report.scroll.container).toBe('other');
+    expect(report.parser.latest).toEqual(diagnostics.parser!.latest);
+    expect(report.parser.sources).toEqual({ 'yt-lockup-view-model': 4 });
+    expect(report.parser.samples).toEqual(
+      diagnostics.parser!.samples.map((sample) => ({
+        ...sample,
+        tag: 'other',
+        childTags: { a: 1 },
+        reasons: [...sample.reasons, 'unknown'],
+      })),
+    );
+    expect(report.scrollContainers.containers).toEqual([
+      {
+        tag: 'other',
+        top: 0,
+        height: 1258,
+        viewport: 1258,
+        selected: true,
+        scrollable: false,
+      },
+    ]);
+    await panel
+      .getByRole('button', { name: 'Playlist-Diagnose kopieren', exact: true })
+      .click();
+    await expect(
+      panel.getByRole('status').filter({
+        hasText:
+          clipboard === 'success'
+            ? 'Bereinigte Playlist-Diagnose kopiert.'
+            : 'Diagnose markieren und manuell kopieren',
+      }),
+    ).toBeVisible();
+    if (clipboard !== 'unavailable')
+      expect(
+        await page.evaluate(() =>
+          Reflect.get(globalThis, 'attemptedPlaylistCopy'),
+        ),
+      ).toBe(text);
+    expect(
+      await page.evaluate(() =>
+        Reflect.get(globalThis, 'copiedPlaylistDiagnostic'),
+      ),
+    ).toBe(clipboard === 'success' ? text : undefined);
+    await expect(textarea).toBeVisible();
+    await expect(textarea).toHaveValue(text);
+    await textarea.selectText();
+    expect(
+      await textarea.evaluate((element: HTMLTextAreaElement) =>
+        element.value.slice(element.selectionStart, element.selectionEnd),
+      ),
+    ).toBe(text);
+    await expect(panel).not.toContainText('PRIVATE_CLIPBOARD_ERROR');
+  });
+}
+
+test('0.2.4 legacy playlist catalog and stale entries survive reload without optional diagnostics', async ({
+  page,
+}) => {
+  await seed(page);
+  const entry = {
+    id: 'PLlegacyArchive123',
+    name: '<img src=x onerror="window.legacyInjected=true"> Legacy archive',
+    url: 'https://www.youtube.com/playlist?list=PLlegacyArchive123',
+    visibility: 'private',
+    ownership: 'unknown',
+  };
+  const stale = [
+    { ...entry, id: 'PLlegacyStale123', name: 'Legacy stale archive' },
+  ];
+  const legacy = {
+    entries: [entry],
+    status: 'partial',
+    updatedAt: '2026-10-17T00:00:00Z',
+    message: 'Gesicherter 0.2.4-Teilbestand.',
+    diagnostics: {
+      reason: 'stable_unverified_end',
+      rounds: 2,
+      scrollAttempts: 1,
+      observedScrolls: 0,
+      scroll: null,
+      continuation: false,
+      continuationSeen: false,
+      unsupportedCards: 0,
+      expectedCount: null,
+      completenessVerified: false,
+    },
+  };
+  await page.evaluate(
+    ({ legacy, stale }) => {
+      localStorage.setItem(
+        'latersift-playlist-catalog-v1',
+        JSON.stringify(legacy),
+      );
+      localStorage.setItem(
+        'latersift-playlist-catalog-v1-previous',
+        JSON.stringify(stale),
+      );
+    },
+    { legacy, stale },
+  );
+  for (let reload = 0; reload < 2; reload++) {
+    await page.reload();
+    await page.getByRole('button', { name: 'Playlists', exact: true }).click();
+    const panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+    await expect(panel.getByRole('status')).toContainText(
+      '1 Playlists · Teilbestand / Vollständigkeit offen',
+    );
+    await expect(
+      panel
+        .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+        .getByRole('listitem'),
+    ).toContainText(entry.name);
+    await expect(panel.locator('img')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => Reflect.get(window, 'legacyInjected')),
+    ).toBeUndefined();
+    await panel
+      .getByText('Vorheriger Katalog (veraltet, vor dieser Aktualisierung)', {
+        exact: true,
+      })
+      .click();
+    await expect(
+      panel.getByText('Legacy stale archive · PLlegacyStale123', {
+        exact: true,
+      }),
+    ).toBeVisible();
+    const { text } = await readPlaylistFeedDiagnostic(page);
+    expect(JSON.parse(text)).toEqual(legacy.diagnostics);
+    expect(text).not.toMatch(/PLlegacy|Legacy archive|youtube|onerror/);
+    expect(
+      await page.evaluate(() => ({
+        catalog: JSON.parse(
+          localStorage.getItem('latersift-playlist-catalog-v1')!,
+        ),
+        previous: JSON.parse(
+          localStorage.getItem('latersift-playlist-catalog-v1-previous')!,
+        ),
+      })),
+    ).toEqual({ catalog: legacy, previous: stale });
+  }
+});
 
 test('playlist feed uses an inactive read-only work tab and persists checkpoints before acknowledging', async ({
   page,

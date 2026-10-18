@@ -732,6 +732,11 @@ describe('real content.ts shared scanner/write lock integration', () => {
       advance: vi.fn(),
       info: vi.fn(),
       reset: vi.fn(),
+      diagnostics: vi.fn(() => ({
+        containers: [],
+        inspectedElements: 0,
+        truncated: false,
+      })),
     });
     const add = vi.spyOn(window, 'addEventListener');
     await import('../src/content');

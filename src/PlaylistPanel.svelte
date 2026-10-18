@@ -9,6 +9,7 @@
     type WorkTabDiagnostic,
   } from './work-tabs';
   import WorkTabDiagnostics from './WorkTabDiagnostics.svelte';
+  import { formatPlaylistDiagnostic } from './playlist-diagnostics';
 
   let {
     disabled = false,
@@ -18,6 +19,32 @@
   let previous = $state<PlaylistEntry[]>([]);
   let busy = $state(false);
   let error = $state('');
+  let diagnosticFeedback = $state('');
+  const diagnosticJSON = $derived(
+    catalog ? formatPlaylistDiagnostic(catalog.diagnostics) : '',
+  );
+  const catalogStatus = $derived(
+    catalog?.status === 'running'
+      ? 'Aktualisierung läuft'
+      : catalog?.diagnostics.reason === 'unsupported_dom'
+        ? 'Nicht unterstützte Playlist-Struktur (unsupported_dom)'
+        : catalog?.diagnostics.reason === 'no_card_containers'
+          ? 'Keine unterstützten Kartencontainer (no_card_containers)'
+          : catalog?.status === 'failed'
+            ? 'Playlist-Erkennung fehlgeschlagen'
+            : catalog?.status === 'interrupted'
+              ? 'Aktualisierung unterbrochen'
+              : 'Teilbestand / Vollständigkeit offen',
+  );
+  async function copyDiagnostic() {
+    try {
+      await navigator.clipboard.writeText(diagnosticJSON);
+      diagnosticFeedback = 'Bereinigte Playlist-Diagnose kopiert.';
+    } catch {
+      diagnosticFeedback =
+        'Kopieren nicht möglich. Diagnose markieren und manuell kopieren.';
+    }
+  }
   let workTabReports = $state<WorkTabDiagnostic[]>([]);
   function recordWorkTab(report: WorkTabDiagnostic) {
     if (JSON.stringify(workTabReports.at(-1)) !== JSON.stringify(report))
@@ -54,6 +81,7 @@
     busy = true;
     error = '';
     workTabReports = [];
+    diagnosticFeedback = '';
     previous = [
       ...new Map(
         [...previous, ...(catalog?.entries ?? [])].map((entry) => [
@@ -141,9 +169,7 @@
   <WorkTabDiagnostics reports={workTabReports} />
   {#if catalog}
     <p role="status">
-      {catalog.entries.length} Playlists · {catalog.status === 'running'
-        ? 'Aktualisierung läuft'
-        : 'Teilbestand / Vollständigkeit offen'} · Stand: {catalog.updatedAt}
+      {catalog.entries.length} Playlists · {catalogStatus} · Stand: {catalog.updatedAt}
     </p>
     <p>{catalog.message}</p>
     <ul aria-label="Verifizierte Playlist-IDs">
@@ -159,9 +185,22 @@
         </li>
       {/each}
     </ul>
-    <details>
+    <details class="dialog-diagnostic">
       <summary>Technische Playlist-Diagnose</summary>
-      <pre>{JSON.stringify(catalog.diagnostics, null, 2)}</pre>
+      <p class="hint">
+        Parsergründe, Struktursamples und Scroll-/Nachladebefunde. Latest zählt
+        die letzte Runde, Peaks den höchsten gleichzeitig beobachteten Wert,
+        nicht die Summe wiederholter Versuche. Keine Playlist-Namen, IDs oder
+        URL-Werte. Ein nicht scrollbares Dokument kann regulär sein.
+      </p>
+      <textarea
+        aria-label="Bereinigte Playlist-Feed-Diagnose"
+        readonly
+        rows="18"
+        value={diagnosticJSON}
+      ></textarea>
+      <button onclick={copyDiagnostic}>Playlist-Diagnose kopieren</button>
+      {#if diagnosticFeedback}<p role="status">{diagnosticFeedback}</p>{/if}
     </details>
   {/if}
   {#if previous.some((entry) => !catalog?.entries.some((current) => current.id === entry.id))}

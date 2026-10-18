@@ -55,6 +55,92 @@ function fixture() {
 }
 
 describe('read-only playlist scroller geometry', () => {
+  it('reports selected and alternative scroll containers without changing the scroll target', () => {
+    const f = fixture();
+    const scroller = createPlaylistScroller(f.doc);
+    const html = f.doc.body.innerHTML;
+    const diagnostic = scroller.diagnostics();
+    expect(diagnostic.containers).toEqual(
+      expect.arrayContaining([
+        {
+          tag: 'section',
+          top: 0,
+          height: 3000,
+          viewport: 600,
+          selected: true,
+          scrollable: true,
+        },
+        {
+          tag: 'document',
+          top: 0,
+          height: 10000,
+          viewport: 1000,
+          selected: false,
+          scrollable: true,
+        },
+        {
+          tag: 'main',
+          top: 0,
+          height: 8000,
+          viewport: 800,
+          selected: false,
+          scrollable: true,
+        },
+      ]),
+    );
+    expect(diagnostic.inspectedElements).toBeGreaterThan(0);
+    expect(diagnostic.truncated).toBe(false);
+    expect(f.innerScroll).not.toHaveBeenCalled();
+    expect(f.doc.body.innerHTML).toBe(html);
+  });
+
+  it('reports a fitting document as non-scrollable and keeps custom names out of diagnostics', () => {
+    const f = fixture();
+    geometry(f.root, 1258, 1258);
+    const privateNode = f.doc.createElement('private-playlist-title');
+    privateNode.style.overflowY = 'auto';
+    privateNode.setAttribute('data-private-id', 'PL_secret');
+    f.doc.body.append(privateNode);
+    geometry(privateNode, 2000, 500);
+    const diagnostic = createPlaylistScroller(
+      f.doc,
+      'ytd-rich-grid-renderer',
+    ).diagnostics();
+    expect(diagnostic.containers[0]).toEqual({
+      tag: 'document',
+      top: 0,
+      height: 1258,
+      viewport: 1258,
+      selected: true,
+      scrollable: false,
+    });
+    expect(diagnostic.containers).toContainEqual({
+      tag: 'other',
+      top: 0,
+      height: 2000,
+      viewport: 500,
+      selected: false,
+      scrollable: true,
+    });
+    expect(JSON.stringify(diagnostic)).not.toMatch(
+      /private-playlist-title|PL_secret|data-private-id/,
+    );
+  });
+
+  it('bounds geometry inspection and the number of reported containers', () => {
+    const f = fixture();
+    for (let i = 0; i < 3010; i++) {
+      const node = f.doc.createElement('div');
+      node.style.overflowY = 'auto';
+      geometry(node, 2000, 500);
+      f.doc.body.append(node);
+    }
+    const diagnostic = createPlaylistScroller(f.doc).diagnostics();
+    expect(diagnostic.containers).toHaveLength(12);
+    expect(diagnostic.inspectedElements).toBe(3000);
+    expect(diagnostic.truncated).toBe(true);
+    expect(diagnostic.containers[0].selected).toBe(true);
+  });
   it('scrolls the feed renderer itself when it is the nearest overflowing container', () => {
     const f = fixture();
     const feed = f.doc.createElement('ytd-rich-grid-renderer');

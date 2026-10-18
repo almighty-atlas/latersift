@@ -97,6 +97,7 @@ browser.runtime.onConnect.addListener((port) => {
             wait,
             advance: feedScroller.advance,
             scrollInfo: feedScroller.info,
+            scrollDiagnostics: feedScroller.diagnostics,
           },
           controller.signal,
           persist,

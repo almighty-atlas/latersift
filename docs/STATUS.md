@@ -1,6 +1,29 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.4 / M3.2.1 – Arbeitstab-Readiness und Diagnose
+## Aktuell: 0.2.5 – ausschließlich Playlist-Feed-Diagnose
+
+Basis: **0.2.4**, Stand: 18.10.2026. [Playlist-Feed-Diagnose: Evidenz, exakte Felder, Datenschutz und nächster Zen-Test](PLAYLIST-FEED-DIAGNOSTICS.md). Der Nutzer erlaubt ausdrücklich einen reinen Diagnoseschritt trotz noch unzureichender Evidenz für die Parserursache.
+
+- **Nutzerbestätigte Live-Evidenz aus Zen mit 0.2.4:** `target-ready`, Origin YouTube, Marker passend, keine Navigationsfehler; `entries: 0`, `unsupportedCards: 4`, `rounds: 6`, `scrollAttempts: 5`, `observedScrolls: 0`, Dokumenthöhe **1258**, Viewport **1258**, `continuation: false`, `stable_unverified_end`. Damit ist die Navigation für diesen Nutzerlauf behoben; der Parser lehnt vier Kandidaten ab. Weder genaue Ablehnungsursache noch aktuelles DOM, tatsächlicher Playlist-Bestand, falscher Scrollcontainer oder Throttling sind damit belegt.
+- **Umfang 0.2.5:** exakte Parser-Ablehnungsgründe mit letzten Zählern und Spitzenwerten statt Retry-Inflation, höchstens zwölf bereinigte Struktursamples, Kartenanzahl/-änderungen, Wachstums- und beobachtete Pagination-Hinweise. Scrollcontainer-Diagnose: höchstens 3.000 inspizierte Elemente und zwölf Berichte mit sicheren Tags, Geometrie, Auswahl- und Trunkierungskennzeichen; kein automatischer Wechsel. `scrollAvailability` betrifft nur den ausgewählten Kontext, auch wenn eine scrollbare Alternative existiert. Kein Scrollen ist nicht grundsätzlich ein Fehler.
+- **Ehrliches Ende:** weiterhin begrenzt auf verzögertes Rendern warten; keine sofortige Ablehnung beim ersten leeren/unlesbaren Zustand. Bei normalem begrenztem Ende mit null akzeptierten Einträgen `failed` / `unsupported_dom`, wenn Kandidaten beobachtet wurden, sonst `failed` / `no_card_containers`. Mit akzeptierten Einträgen bleibt das normale Ergebnis `partial`, niemals belegte Vollständigkeit.
+- **Datenschutz / Upgrade:** Formatgrenze baut das Diagnose-JSON aus freigegebenen Feldern neu auf; rohe Legacy-Fehlertexte und unbekannte Felder/Tags werden nicht durchgereicht. Kopierbutton und Textfeld-Fallback bleiben erhalten. Neue Diagnosefelder sind optional; alter Katalog und stale Einträge bleiben erhalten, kein Speicherreset.
+- **Unverändert:** Parsing-Selektoren, strikte Identitätsprüfung, Rechte, YouTube-Writes, Fokusverhalten, Vollständigkeitsprüfung und Schreibgates. Pagination nur beobachten, keine Next-/Mehr-Klicks. Keine eigenen angemeldeten Live-Tests, keine neuen externen Netzwerk-/Browserproben in diesem Schritt; die Proben unter 0.2.4 sind historische Befunde.
+
+### Qualitätsergebnisse 0.2.5
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **829/829 in 19 Dateien**, darunter 60 Playlist-Parser-/Scannerfälle, 81 Format-/Datenschutzfälle und 15 Scrollgeometrie-/Diagnosefälle. Keine neuen Parsing-Selektoren; bestehende Sicherheitskette weiterhin getestet.
+- `pnpm test:ui`: **86/86 in Chromium und Firefox**. Vier abgewiesene Karten mit `unsupported_dom`, separat erfolgreiche Arbeitstabnavigation, fehlende Container, bereinigte Kopie, Clipboard-Ablehnung/fehlende API und unverändert erhaltener 0.2.4-Legacy-Katalog nach Reload getestet.
+- `pnpm package`: Produktionsbuild und `artifacts/latersift-0.2.5-unsigned.xpi` erfolgreich; `pnpm lint:extension`: **0 Fehler, 0 Warnungen, 0 Hinweise**.
+- `pnpm test:firefox-extension` und `LATERSIFT_ADDON_PATH=artifacts/latersift-0.2.5-unsigned.xpi node scripts/test-firefox.mjs`: echtes MV3-Add-on aus `dist` und finaler XPI in **Firefox 157.0** temporär installiert, ohne Manifestwarnungen.
+- SHA-256 der lokal getesteten XPI: `92b89fefa8457a817e1364a79abe32caea49ca94bc6bc048741d47886386b48a`.
+
+DOM-/UI-Tests sind synthetisch; Installationsprüfungen sind keine angemeldete Zen-/Feed-Abnahme. Keine Live-Parserkorrektur behauptet, keine Signierung/AMO-Veröffentlichung.
+
+Nächster Schritt: im angemeldeten Zen mit 0.2.5 genau einmal „Playlists aktualisieren“, danach Arbeitstab-Diagnose und bereinigtes Playlist-Diagnose-JSON kopieren, **nicht das private Backup**. Fehlen Titelknoten, leitet die Sample-Struktur eine gezielte bereinigte DOM-Inspektion an; ohne diese Evidenz keine geratenen Selektoren hinzufügen. WL-Abnahme weiterhin separat.
+
+## Historischer Stand: 0.2.4 / M3.2.1 – Arbeitstab-Readiness und Diagnose
 
 Basis: **0.2.3**, Stand: 18.10.2026. [M3.2.1: Codeursache, Vertrag, Evidenz und nächster Zen-Test](M3.2.1.md). Nutzerbestätigter Fehler in Zen mit LaterSift 0.2.3: **„Work tab navigated away from its marked source.“** Die konkrete auslösende Navigation bzw. Ladephase beim Nutzer ist **noch nicht diagnostisch bestätigt**; kein angemeldeter Zen-Reproduktionstest.
 
@@ -8,7 +31,7 @@ Basis: **0.2.3**, Stand: 18.10.2026. [M3.2.1: Codeursache, Vertrag, Evidenz und 
 - **Readiness:** initial `about:blank`/fehlende URL/`loading` begrenzt bis 30 Sekunden pollen. Lesbar nur `https://www.youtube.com/feed/playlists` ohne Query, optional abschließender Slash, oder exakt `https://www.youtube.com/playlist?list=WL`; Fragment jeweils optional. Fremde abgeschlossene Ziele nie akzeptieren, insbesondere kein Consent und keine anderen Feed-Aliasse. Zieladresse bleibt unverändert.
 - **Cleanup separat und strenger:** passende Tab-ID, exakte ursprüngliche URL mit UUID, `complete`, keine abweichende `pendingUrl`. Create-Snapshots werden bereits vor dem Journaling berücksichtigt. Beobachteter Markerverlust, abweichende initiale Lade-URL oder abweichende Pending-URL widerrufen Cleanup-Eigentum dauerhaft, auch bei späterer Rückkehr des Markers. Der Quellen-Lock bleibt für den weiterhin lesbaren Tab bis `close()` gehalten. Ladezustand oder unverifizierbarer Kontext erlaubt kein Schließen; Tabs dürfen offen bleiben.
 - **Diagnose in beiden Importwegen:** feste Enums und freigegebene Pfadkategorien, schon vor Katalog bzw. erstem Checkpoint sichtbar; keine IDs, Hashwerte oder vollständigen URLs. `pendingUrl` ist weder erforderlich noch positiver Readiness-Beleg; MDN nennt dafür ausdrücklich die `tabs`-Berechtigung. Diese wird nicht hinzugefügt. Eine auf fremdem Host fehlende `tab.url` kann zu Timeout/`unknown` führen, nicht zu einer behaupteten Anmeldung/Consent-Ursache.
-- **Aktuell vom Hauptagenten tatsächlich ausgeführte Netzwerkproben (nicht angemeldet):** Python `urllib` auf `/feed/playlists` lieferte HTTP 200, gleiche finale URL und gleichen Pfad, keinen Redirect und keine Canonical-Links. Eine frische Headless-Firefox-157-Browserprobe endete dagegen auf `consent.youtube.com/m`, mit erhaltenem Marker. Belegt ist eine client-/kontextabhängig mögliche Consent-Weiterleitung, weder eine veraltete Zieladresse noch die Ursache im angemeldeten Zen des Nutzers.
+- **Damals für 0.2.4 vom Hauptagenten tatsächlich ausgeführte Netzwerkproben (nicht angemeldet):** Python `urllib` auf `/feed/playlists` lieferte HTTP 200, gleiche finale URL und gleichen Pfad, keinen Redirect und keine Canonical-Links. Eine frische Headless-Firefox-157-Browserprobe endete dagegen auf `consent.youtube.com/m`, mit erhaltenem Marker. Belegt ist eine client-/kontextabhängig mögliche Consent-Weiterleitung, weder eine veraltete Zieladresse noch die Ursache im angemeldeten Zen des Nutzers.
 
 Keine neuen Berechtigungen, YouTube-Writes oder Schreibgates; bestehende Identitäts-, Vollständigkeits- und Schreibprüfungen bleiben unverändert. Nächster Schritt: beide lesenden Wege getrennt in Zen mit bereinigter Diagnose testen.
 
@@ -89,14 +112,14 @@ Stand: 17.10.2026 · **0.2.0**. M1 ist **nutzerbestätigt abgeschlossen**; M3 is
 
 ## Evidenz klar trennen
 
-| Bereich                     | Beleg / Einordnung                                                                                                                                                                        |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M1 live                     | **Nutzerbestätigt:** 4.926/4.926, `complete`, vollständiges JSON lokal gespeichert. YouTubes „Nicht verfügbare Videos anzeigen“ machte die fehlenden 240 sichtbar.                        |
-| Eigener Agenten-Live-Test   | Kein eigener automatisierter angemeldeter Live-Nachweis; die M1-Aussage stammt ausdrücklich vom Nutzer.                                                                                   |
-| M3 live                     | **Noch kein bestätigter Schreibpilot.** Es wurden keine eigenen Live-Schreibaktionen ausgeführt.                                                                                          |
-| Aktuelle 0.2.0-Verifikation | Vollständige lokale Prüffolge erfolgreich: **466/466 Vitest, 48/48 UI**; Push- und PR-CI für `b35391d` ebenfalls erfolgreich, Links unten.                                                |
-| Fixtures / Smoke-Test       | Synthetische DOM-/UI-/Executor-Tests bzw. Add-on-Installation sind keine Live-M3-Abnahme.                                                                                                 |
-| Distribution                | `artifacts/latersift-0.2.0-unsigned.xpi` erstellt; echtes MV3-Add-on aus `dist` und finaler XPI erfolgreich in Firefox 157 installiert. Weiterhin unsigniert, keine AMO-Veröffentlichung. |
+| Bereich                        | Beleg / Einordnung                                                                                                                                                                        |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1 live                        | **Nutzerbestätigt:** 4.926/4.926, `complete`, vollständiges JSON lokal gespeichert. YouTubes „Nicht verfügbare Videos anzeigen“ machte die fehlenden 240 sichtbar.                        |
+| Eigener Agenten-Live-Test      | Kein eigener automatisierter angemeldeter Live-Nachweis; die M1-Aussage stammt ausdrücklich vom Nutzer.                                                                                   |
+| M3 live                        | **Noch kein bestätigter Schreibpilot.** Es wurden keine eigenen Live-Schreibaktionen ausgeführt.                                                                                          |
+| Historische 0.2.0-Verifikation | Vollständige lokale Prüffolge erfolgreich: **466/466 Vitest, 48/48 UI**; Push- und PR-CI für `b35391d` ebenfalls erfolgreich, Links unten.                                                |
+| Fixtures / Smoke-Test          | Synthetische DOM-/UI-/Executor-Tests bzw. Add-on-Installation sind keine Live-M3-Abnahme.                                                                                                 |
+| Distribution                   | `artifacts/latersift-0.2.0-unsigned.xpi` erstellt; echtes MV3-Add-on aus `dist` und finaler XPI erfolgreich in Firefox 157 installiert. Weiterhin unsigniert, keine AMO-Veröffentlichung. |
 
 Der frühere Teilimport in Zen/CachyOS hatte 4.686 statt 4.926 IDs, höchste Position 4.686, unidentifizierbare Zeilen 0 und `incomplete`. Dieser Befund ist durch den späteren nutzerbestätigten vollständigen Scan **als aktueller M1-Abnahmestand überholt**. Die Null bezeichnete nicht die Verfügbarkeit aller Videos. Fortschritt nach Tabaktivierung war eine Beobachtung, kein isolierter Throttling-Nachweis; die 240 später eingeblendeten Einträge dürfen nicht nachträglich als bewiesener Throttlingfehler dargestellt werden.
 
