@@ -3,7 +3,11 @@ import type { PlaylistEntry } from './adapter/playlists';
 export function playlistDisplayName(entry: PlaylistEntry): string {
   return entry.nameStatus !== 'unknown' && entry.name?.trim()
     ? entry.name
-    : 'Playlist ohne bestätigten Namen';
+    : entry.candidateSource === 'lockup-watch-heading' &&
+        entry.candidateName?.trim() &&
+        entry.nameSource !== 'conflicting'
+      ? entry.candidateName
+      : 'Playlist ohne bestätigten Namen';
 }
 
 export function playlistNameLabel(entry: PlaylistEntry): string {
@@ -11,6 +15,12 @@ export function playlistNameLabel(entry: PlaylistEntry): string {
     return 'Name: bestätigt';
   if (entry.nameStatus === undefined && entry.name?.trim())
     return 'Name: gespeichert (älterer Katalog)';
+  if (
+    entry.candidateSource === 'lockup-watch-heading' &&
+    entry.candidateName?.trim() &&
+    entry.nameSource !== 'conflicting'
+  )
+    return 'Name: aus Playlist-Karte abgeleitet, noch nicht unabhängig bestätigt';
   return 'Name: unbekannt';
 }
 

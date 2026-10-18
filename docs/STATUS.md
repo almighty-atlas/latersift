@@ -1,6 +1,23 @@
 # Lieferstatus / Evidenz
 
-## Aktuell: 0.2.7 – gezielte Lockup-Strukturdiagnose
+## Aktuell: 0.2.8 – sichtbare, unbestätigte Namenskandidaten
+
+- Nutzerbefund aus 0.2.7: 18 erkannte Identitäten ohne bestätigte Namen; zwölf Samples mit eindeutiger gemeinsamer Lockup-Metadatenstruktur und exakt passenden Watch-Playlist-IDs. Struktur belegt, Titelsemantik nicht unabhängig bestätigt.
+- Kandidaten separat als `candidateName` / `candidateSource: lockup-watch-heading`; niemals neue `confirmed`-Quelle. Eindeutige sichtbare lokale Struktur, keine widersprüchlichen IDs, versteckten/nestenden Titelinhalte oder konkurrierenden Kandidaten. Konflikte bleiben scanweit bestehen, auch bei Virtualisierung.
+- Namen primär in LaterSift, explizite unbestätigte Herkunft; IDs eingeklappt. Identität, Eigentum und Schreibbarkeit bleiben getrennt. Bestehende Bestände, strenge Namensquellen und sämtliche Schreibgates erhalten; keine neuen Berechtigungen, Fokus-/Playback-/YouTube-Schreibaktionen.
+- Unabhängige Seitenprüfung untersucht und mangels belegtem robustem Titelparser bewusst zurückgestellt. Kein spekulativer Bestätigungsbutton; [Begründung und Zen-Abnahme](PLAYLIST-IDENTITY.md).
+- Keine eigene angemeldete Live-Abnahme. Synthetische Tests ersetzen nicht die nächste Nutzerprüfung.
+
+### Qualitätsergebnisse 0.2.8
+
+- `pnpm install --frozen-lockfile`, `pnpm check` (0 Fehler/Warnungen), `pnpm lint`, `pnpm format:check` und `git diff --check`: erfolgreich.
+- `pnpm test`: **944/944 in 21 Dateien**. **34 neue Kandidatenfälle**: passende/abweichende/mehrfache IDs, echte Videotitel nur als unbestätigter Hinweis, leere/doppelte Überschriften, CSS-/ARIA-versteckte Inhalte, verschachtelte Karten/Metadaten, widersprüchliche Kandidaten/strenge Namen und Virtualisierung inklusive **0 → 4 → 18**.
+- `pnpm test:ui`: **94/94 in Chromium und Firefox**. 18 Kandidaten sichtbar, IDs standardmäßig eingeklappt, Herkunft und offene Sicherheitsstatus sichtbar, Persistenz/Reload, lokale Zielwahl ohne zusätzliche Transportaktion und textfreier Diagnoseexport geprüft. Neue Reload-Testnavigation korrigiert; ein einmaliger Fehler eines unveränderten Operations-Tests war im vollständigen Wiederholungslauf nicht reproduzierbar. Zwei zusätzliche CSS-Fixtures benötigten wie bestehende DOMParser-Tests eine CSS-View; danach Gesamtlauf erfolgreich.
+- `pnpm package`, `pnpm lint:extension`: Produktionspaket erfolgreich, **0 Fehler/Warnungen/Hinweise**. `pnpm test:firefox-extension` sowie finale XPI temporär in **Firefox 157.0** installiert, ohne Manifestwarnungen.
+- XPI: `artifacts/latersift-0.2.8-unsigned.xpi`; SHA-256: `15e70889e2e1c3d2ff1cba56d3cc396d9adc1692ecbb76796245b3bb2bbbccdc`.
+- Keine Signierung oder AMO-Veröffentlichung, keine YouTube-Schreibtests. Bestehender PR #2 wird aktualisiert, nicht gemergt.
+
+## Historischer Stand: 0.2.7 – gezielte Lockup-Strukturdiagnose
 
 - **Nutzergemeldeter Live-Befund mit 0.2.6:** 18 akzeptierte `yt-lockup-view-model`-Karten ohne Namen. Die Aufnahme namenloser Identitäten ist für diesen Lauf belegt; Namensauflösung und Feed-Vollständigkeit sind damit nicht bestätigt. **Watch list bleibt unbewiesen**, daher kein neuer `playlist-watch-heading`-Parser und keine neue Namensquelle.
 - **Implementierte `titleStructure`-Felder:** `watchLinksMatchingPlaylist`, `watchLinksMissingPlaylist`, `watchLinksConflictingPlaylist`, `watchLinksUnresolvedPlaylist`, `headingsWithMatchingWatchPlaylist`, `ambiguousHeadings`, `watchHeadingContainsLink`, `watchLinkContainsHeading`, `watchHeadingsInLockupMetadata`, `watchHeadingsWithCanonicalLinkInMetadata`, `watchHeadingsWithCanonicalLinkOutsideMetadata`. [Feldbedeutung und Diagnosegrenzen](PLAYLIST-FEED-DIAGNOSTICS.md#titlestructure-diagnosefelder).

@@ -173,11 +173,14 @@
     <ul aria-label="Verifizierte Playlist-IDs">
       {#each catalog.entries as entry (entry.id)}
         <li>
-          <strong>{playlistDisplayName(entry)}</strong> · {playlistNameLabel(
-            entry,
-          )} · ID aus URL: <code>{entry.id}</code> (nachgewiesen) ·
-          Sichtbarkeit: {entry.visibility} · Eigentümer: unbekannt · Schreibbarkeit:
-          nicht bestätigt
+          <strong>{playlistDisplayName(entry)}</strong>
+          <p>{playlistNameLabel(entry)}</p>
+          <p>ID: nachgewiesen · Schreibbarkeit: nicht bestätigt</p>
+          <details>
+            <summary>Playlist-Details</summary>
+            <p>ID aus URL: <code>{entry.id}</code> (nachgewiesen)</p>
+            <p>Sichtbarkeit: {entry.visibility} · Eigentümer: unbekannt</p>
+          </details>
           <button
             onclick={() => onchoose(entry.id)}
             disabled={disabled || busy || !/^PL[\w-]+$/.test(entry.id)}

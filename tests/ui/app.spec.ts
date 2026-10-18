@@ -937,6 +937,70 @@ function unnamedPlaylistFeed(): PlaylistCatalog {
   return fixture;
 }
 
+test('0.2.8 shows 18 unconfirmed candidates with IDs collapsed, persists them and keeps gates closed', async ({
+  page,
+}) => {
+  await seed(page);
+  const fixture = unnamedPlaylistFeed();
+  fixture.entries = fixture.entries.map((entry, index) => ({
+    ...entry,
+    candidateName: `Fixture candidate ${index + 1}`,
+    candidateSource: 'lockup-watch-heading' as const,
+  }));
+  await fakePlaylistFeed(page, null, null, fixture);
+  let panel = await openPlaylistFeed(page);
+  for (let pass = 0; pass < 2; pass++) {
+    if (pass) {
+      await page.reload();
+      await page
+        .getByRole('button', { name: 'Playlists', exact: true })
+        .click();
+      panel = page.getByRole('region', { name: 'Playlist-Katalog' });
+    }
+    const rows = panel
+      .getByRole('list', { name: 'Verifizierte Playlist-IDs' })
+      .getByRole('listitem');
+    await expect(rows).toHaveCount(18);
+    for (const [index, entry] of fixture.entries.entries()) {
+      const row = rows.nth(index);
+      await expect(row.locator('strong')).toHaveText(
+        `Fixture candidate ${index + 1}`,
+      );
+      await expect(row).toContainText(
+        'Name: aus Playlist-Karte abgeleitet, noch nicht unabhängig bestätigt',
+      );
+      await expect(row).toContainText(
+        'ID: nachgewiesen · Schreibbarkeit: nicht bestätigt',
+      );
+      await expect(row.locator('code')).not.toBeVisible();
+      await row.getByText('Playlist-Details', { exact: true }).click();
+      await expect(row.locator('code')).toBeVisible();
+      await expect(row.locator('code')).toHaveText(entry.id);
+      await expect(row).toContainText('Eigentümer: unbekannt');
+    }
+    await expect(
+      panel.getByText('Name: bestätigt', { exact: true }),
+    ).toHaveCount(0);
+  }
+  const { text } = await readPlaylistFeedDiagnostic(page);
+  expect(text).not.toContain('Fixture candidate');
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('latersift-playlist-catalog-v1')!),
+    ),
+  ).toEqual(fixture);
+  const before = await page.evaluate(() =>
+    Reflect.get(globalThis, 'playlistTransport'),
+  );
+  await panel
+    .getByRole('button', { name: 'Als lokales Archivziel wählen' })
+    .first()
+    .click();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, 'playlistTransport')),
+  ).toEqual(before);
+});
+
 test('0.2.6 all 18 unnamed URL-backed playlists remain usable locally and persist null names', async ({
   page,
 }) => {

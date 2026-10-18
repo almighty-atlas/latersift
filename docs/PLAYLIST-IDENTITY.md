@@ -1,4 +1,34 @@
-# Playlist-Identität und Namensevidenz – 0.2.6
+# Playlist-Identität und Namensevidenz – 0.2.8
+
+## Neu in 0.2.8: strukturelle Namenskandidaten
+
+Der nutzerbestätigte Zen-Lauf mit 0.2.7 erkennt 18 akzeptierte Karten ohne bestätigten Namen. In allen zwölf untersuchten Samples: genau ein sichtbarer kanonischer Playlist-Link, ein exakt passender Watch-Playlist-Link in genau einer Überschrift, beide im selben `yt-lockup-metadata-view-model`. Keine widersprüchlichen Watch-IDs oder mehrdeutigen Überschriften. Dies belegt die Struktur, nicht die Playlist-Titelsemantik.
+
+Neue optionale Felder `candidateName` und `candidateSource: lockup-watch-heading` halten den Hinweis getrennt von `name` und `nameStatus`. Eine geeignete Karte erhält weiterhin `name: null`, `nameStatus: unknown`; die bisherigen strengen Namensquellen bleiben unverändert.
+
+Die neue Extraktion ist nur für `yt-lockup-view-model` aktiv: genau ein sichtbarer lokaler Metadatenbereich, genau eine sichtbare lokale Überschrift und ein kanonischer Link darin. Die Überschrift muss genau einen sichtbaren Watch-Link **enthalten**, dessen einziger `list`-Parameter exakt passt. Versteckte oder verschachtelte Fremdinhalte innerhalb der Überschrift, zusätzliche Überschriften, mehrdeutige Metadatenbereiche, fehlende oder widersprüchliche lokale Watch-Playlist-IDs schließen den Kandidaten aus. Kein Klassen-, Thumbnail-, ARIA-Prosa- oder Kartentext-Fallback. Whitespace wird wie bei bestehenden Namen normalisiert; keine unscharfen oder case-insensitiven Vergleiche.
+
+Gleiche Kandidaten derselben ID werden dedupliziert; unterschiedliche Kandidaten oder Konflikte mit strengen Namen sperren beide Namensformen für den Rest des aktuellen Scans. Unbenannte Nachbeobachtungen löschen nicht schon beobachtete Kandidaten. Verschiedene IDs bleiben getrennt, auch bei gleichem Text. Historische Namen werden nicht zu frischer Bestätigung aufgewertet. Keine Datenmigration oder Löschung vorhandener Bestände.
+
+Die UI zeigt den Kandidaten primär mit **„Name: aus Playlist-Karte abgeleitet, noch nicht unabhängig bestätigt“**, **„ID: nachgewiesen“** und **„Schreibbarkeit: nicht bestätigt“**. Lange IDs und Sichtbarkeit/Eigentum liegen unter „Playlist-Details“. Ohne sicheren Kandidaten bleibt „Playlist ohne bestätigten Namen“. Kandidaten können echte Videotitel sein: Nutzerplausibilität ist keine technische Bestätigung. Sie beweisen weder Eigentum, Mitgliedschaft noch Schreibbarkeit. Diagnoseexporte bleiben text- und ID-frei.
+
+### Unabhängige Bestätigung untersucht, bewusst nicht implementiert
+
+Hostrechte und inaktive Arbeitstabs reichen grundsätzlich für einen zusätzlichen DOM-Lesepfad. Der aktuelle Tab-/Read-Vertrag unterstützt aber nur Feed und Watch Later; ein Parser für eindeutig zugeordnete Titel beliebiger kanonischer Playlist-Seiten existiert nicht. Der Headerparser liest nur Videoanzahlen. Für eine zuverlässige Bestätigung fehlen belegte Seitentitelstrukturen und Tests für frischen Zielseitenkontext; Hintergrundtabs können zudem gedrosselt/suspendiert werden. Der aktive Watch-/Schreibdialogpfad ist ausdrücklich ungeeignet.
+
+Deshalb kein „Namen überprüfen“-Knopf mit spekulativem Parser und keine automatischen zusätzlichen Tabs. Der Bestätigungsstatus bleibt offen. Ein späterer Prüfer müsste nach ausdrücklichem Klick begrenzt sequenziell inaktive kanonische Playlist-Seiten lesen, exakte ID und frische eindeutige Titel prüfen und ausschließlich bei exakter eindeutiger Übereinstimmung bestätigen; Konflikte bleiben unbekannt mit Diagnose. Kein Fokuswechsel, Playback oder Schreiben und keine neuen Rechte. Für 0.2.8 wurde kein angemeldeter Live-Seitenparser behauptet.
+
+### Nächster Zen-Test für 0.2.8
+
+1. Backup lokal sichern, im selben Profil auf 0.2.8 aktualisieren, offene YouTube-Tabs neu laden.
+2. Genau einmal „Playlists aktualisieren“ im inaktiven Arbeitstab starten.
+3. Bei derselben Struktur sollen die 18 erkannten Identitäten soweit geeignet ihre Kandidaten direkt in LaterSift zeigen. Namen dort auf Plausibilität prüfen, nicht durch Öffnen der YouTube-Seite. Keine Vollständigkeits- oder Namensbestätigung ableiten.
+4. Kandidatenkennzeichnung, eingeklappte IDs, unbekanntes Eigentum und unbestätigte Schreibbarkeit prüfen. Bei Konflikten bleibt der Name unbekannt.
+5. Nur Version, Anzahl plausibler/unbekannter Kandidaten, Status und bereinigte Diagnose zurückmelden; keine Namen, tatsächlichen IDs, Screenshots oder privaten Exporte. Keine Schreibtests.
+
+## Historischer Vertrag 0.2.6
+
+Die folgenden Abschnitte dokumentieren den bisherigen strengen Namensvertrag und damaligen Prüfstand. Die Kandidatenanzeige und nächste Abnahme oben ersetzen die damalige UI-/Testanweisung.
 
 ## Evidenz: was der Nutzerlauf belegt
 

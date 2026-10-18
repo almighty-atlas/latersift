@@ -1,6 +1,9 @@
 export interface PlaylistEntry {
   id: string;
   name: string | null;
+  /** Structural hint only; never confirmed name or write-authority evidence. */
+  candidateName?: string;
+  candidateSource?: 'lockup-watch-heading';
   /** Optional for stored legacy entries; every newly scanned entry sets these. */
   nameStatus?: 'confirmed' | 'unknown';
   nameSource?:
@@ -429,7 +432,38 @@ function titleEvidence(card: Element, canonical?: string) {
     structure.localHeadingReferences++;
     add(target, 'aria-labelledby');
   }
-  return { names, structure, ambiguous, empty };
+  // This proven layout is a naming hint, not independent semantic evidence.
+  let candidateName: string | undefined;
+  const metadata = visible('yt-lockup-metadata-view-model');
+  const heading = headings[0];
+  if (
+    card.matches('yt-lockup-view-model') &&
+    metadata.length === 1 &&
+    canonicalLinks.length === 1 &&
+    headings.length === 1 &&
+    heading.closest('yt-lockup-metadata-view-model') === metadata[0] &&
+    canonicalLinks[0].closest('yt-lockup-metadata-view-model') ===
+      metadata[0] &&
+    structure.watchLinksConflictingPlaylist === 0 &&
+    structure.watchLinksMissingPlaylist === 0 &&
+    structure.ambiguousHeadings === 0
+  ) {
+    const links = headingLinks(heading);
+    const contaminated = [...heading.querySelectorAll('*')].some(
+      (node) => !sameCard(node) || hidden(node),
+    );
+    if (
+      !contaminated &&
+      links.length === 1 &&
+      heading.contains(links[0]) &&
+      watchLinks.includes(links[0]) &&
+      watchRelation(links[0]) === 'matching'
+    ) {
+      const text = visibleText(heading).replace(/\s+/g, ' ').trim();
+      if (text) candidateName = text;
+    }
+  }
+  return { names, structure, ambiguous, empty, candidateName };
 }
 
 function parseCard(card: Element): CardResult {
@@ -447,7 +481,12 @@ function parseCard(card: Element): CardResult {
   if (urls.size === 0) reasons.push('no_playlist_link');
   if (urls.size > 1) reasons.push('conflicting_playlist_ids');
   const url = [...urls.values()][0];
-  const { names, ambiguous, empty } = titleEvidence(card, url?.href);
+  const { names, ambiguous, empty, candidateName } = titleEvidence(
+    card,
+    url?.href,
+  );
+  if (candidateName && [...names.keys()].some((name) => name !== candidateName))
+    reasons.push('conflicting_titles');
   if (names.size > 1) reasons.push('conflicting_titles');
   if (names.size === 0) {
     if (ambiguous) reasons.push('ambiguous_title_link');
@@ -478,6 +517,9 @@ function parseCard(card: Element): CardResult {
     entry: {
       id: url.searchParams.get('list')!,
       name,
+      ...(candidateName && !reasons.includes('conflicting_titles')
+        ? { candidateName, candidateSource: 'lockup-watch-heading' as const }
+        : {}),
       nameStatus: name === null ? 'unknown' : 'confirmed',
       nameSource:
         name === null
@@ -701,6 +743,7 @@ export async function scanPlaylists(
         if (!entry) continue;
         const names = nameEvidence.get(entry.url) ?? new Set<string>();
         if (entry.name !== null) names.add(entry.name);
+        if (entry.candidateName) names.add(entry.candidateName);
         nameEvidence.set(entry.url, names);
         if (names.size > 1 || reasons.includes('conflicting_titles'))
           nameConflicts.add(entry.url);
@@ -713,6 +756,8 @@ export async function scanPlaylists(
         const { entry, reasons } = results[index];
         if (entry && nameConflicts.has(entry.url)) {
           entry.name = null;
+          delete entry.candidateName;
+          delete entry.candidateSource;
           entry.nameStatus = 'unknown';
           entry.nameSource = 'conflicting';
           if (!reasons.includes('conflicting_titles'))
@@ -741,6 +786,14 @@ export async function scanPlaylists(
           entry.name = previous.name;
           entry.nameStatus = previous.nameStatus;
           entry.nameSource = previous.nameSource;
+        }
+        if (
+          !entry.candidateName &&
+          previous?.candidateName &&
+          !nameConflicts.has(entry.url)
+        ) {
+          entry.candidateName = previous.candidateName;
+          entry.candidateSource = previous.candidateSource;
         }
         if (!previous || JSON.stringify(previous) !== JSON.stringify(entry)) {
           entries.set(entry.url, entry);
